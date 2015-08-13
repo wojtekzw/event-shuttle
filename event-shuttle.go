@@ -1,18 +1,22 @@
 package main
 
 import (
+	"flag"
+	"log"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
-	"syscall"
-	"log"
-	"flag"
+	"runtime"
 	"strings"
-     _ "net/http/pprof"
+	"syscall"
 
 	"net/http"
 )
 
 func main() {
+
+	runtime.GOMAXPROCS(2)
+	log.Printf("at=main, MaxParallelism=%d\n", MaxParallelism())
 
 	exhibitor := flag.Bool("exhibitor", false, "use EXHIBITOR_URL from env to lookup seed brokers")
 	brokers := flag.String("brokers", "", "comma seperated list of ip:port to use as seed brokers")
@@ -39,6 +43,8 @@ func main() {
 	if err != nil {
 		log.Panicf("unable to open events.db, exiting! %v\n", err)
 	}
+
+	store.db.NoSync = true
 
 	var brokerList []string
 
@@ -81,11 +87,20 @@ type EventIn struct {
 }
 
 type EventOut struct {
-	event *Event
+	event    *Event
 	sequence int64
 }
 
-type Event struct{
+type Event struct {
 	Channel string
 	Body    []byte
+}
+
+func MaxParallelism() int {
+	maxProcs := runtime.GOMAXPROCS(0)
+	numCPU := runtime.NumCPU()
+	if maxProcs < numCPU {
+		return maxProcs
+	}
+	return numCPU
 }

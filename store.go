@@ -1,47 +1,81 @@
 package main
 
 import (
-	"github.com/boltdb/bolt"
-	"log"
-	"encoding/binary"
 	"bytes"
-	"math"
+	"encoding/binary"
 	"encoding/gob"
-	"time"
+	"log"
+	"math"
 	"sync"
+	"time"
+
+	"github.com/boltdb/bolt"
 )
 
 var EVENTS_BUCKET = []byte("events")
 
 type Store struct {
-	db                 *bolt.DB
-	eventsIn           chan *EventIn
-	eventsOut          chan *EventOut
-	eventsDelivered    chan int64
-	eventsFailed       chan int64
-	readPointer        int64
-	readPointerLock    sync.RWMutex
-	writePointer       int64
-	writePointerLock   sync.RWMutex
-	readTrigger        chan bool
-	stopStore          chan bool
-	stopRead           chan bool
-	stopClean          chan bool
-	stopReport         chan bool
-	shutdown           chan bool
+	db               *bolt.DB
+	eventsIn         chan *EventIn
+	eventsOut        chan *EventOut
+	eventsDelivered  chan int64
+	eventsFailed     chan int64
+	readPointer      int64
+	readPointerLock  sync.RWMutex
+	readFromStore    int64
+	writePointer     int64
+	writePointerLock sync.RWMutex
+	writtenToStore   int64
+	readTrigger      chan bool
+	stopStore        chan bool
+	stopRead         chan bool
+	stopClean        chan bool
+	stopReport       chan bool
+	stopSync         chan bool
+	shutdown         chan bool
 }
 
-func (s *Store) EventsInChannel() chan <- *EventIn {
+func (s *Store) EventsInChannel() chan<- *EventIn {
 	return s.eventsIn
 }
 
-func (s *Store) EventsOutChannel() <- chan *EventOut {
+func (s *Store) EventsOutChannel() <-chan *EventOut {
 	return s.eventsOut
+}
+
+func (s *Store) syncDB() error {
+	return s.db.Sync()
+}
+
+func (s *Store) syncStore() {
+	for {
+		select {
+		case <-s.stopSync:
+			log.Println("go=sync at=shtudown-sync")
+			s.shutdown <- true
+			return
+		case _, ok := <-time.After(10 * time.Second):
+			if ok {
+				err := s.syncDB()
+				if err != nil {
+					log.Printf("go=sync at=sync-interval db sync error=%v ", err)
+				} else {
+					log.Printf("go=sync at=sync-interval db sync OK ")
+
+				}
+
+			}
+		}
+
+	}
 }
 
 func OpenStore(dbFile string) (*Store, error) {
 	log.Printf("go=open at=open-db\n")
-	db, err := bolt.Open(dbFile, 0600)
+	db, err := bolt.Open(dbFile, 0600, &bolt.Options{Timeout: 1 * time.Second})
+	// Do not sync every insert
+	// Do sync every 10 seconds
+	db.NoSync = true
 
 	if err != nil {
 		log.Printf("go=open at=error-openiing-db error=%s\n", err)
@@ -58,7 +92,6 @@ func OpenStore(dbFile string) (*Store, error) {
 		return nil, err
 	}
 
-
 	gob.Register(Event{})
 
 	lastWritePointer, readPointer, err := findReadAndWritePointers(db)
@@ -69,25 +102,28 @@ func OpenStore(dbFile string) (*Store, error) {
 	log.Printf("go=open at=read-pointers read=%d write=%d\n", readPointer, lastWritePointer+1)
 
 	store := &Store{
-		db:db,
-		eventsIn: make(chan *EventIn),
-		eventsOut: make(chan *EventOut, 32),
+		db:              db,
+		eventsIn:        make(chan *EventIn),
+		eventsOut:       make(chan *EventOut, 32),
 		eventsDelivered: make(chan int64, 32),
-		eventsFailed: make(chan int64, 32),
-		writePointer: lastWritePointer + 1,
-		readPointer: readPointer,
-		readTrigger:  make(chan bool, 1), //buffered so reader can send to itself
-		stopStore:  make(chan bool, 1),
-		stopRead:  make(chan bool, 1),
-		stopClean:  make(chan bool, 1),
-		stopReport:  make(chan bool, 1),
-		shutdown: make(chan bool, 4),
+		eventsFailed:    make(chan int64, 32),
+		writePointer:    lastWritePointer + 1,
+		readPointer:     readPointer,
+		readTrigger:     make(chan bool, 1), //buffered so reader can send to itself
+		stopStore:       make(chan bool, 1),
+		stopRead:        make(chan bool, 1),
+		stopClean:       make(chan bool, 1),
+		stopReport:      make(chan bool, 1),
+		stopSync:        make(chan bool, 1),
+		shutdown:        make(chan bool, 5),
 	}
 
 	go store.readEvents()
 	go store.cleanEvents()
 	go store.storeEvents()
 	go store.report()
+	go store.syncStore()
+
 	store.readTrigger <- true
 	log.Printf("go=open at=store-created")
 	return store, nil
@@ -98,6 +134,7 @@ func (s *Store) Close() error {
 	s.stopClean <- true
 	s.stopRead <- true
 	s.stopReport <- true
+	s.stopSync <- true
 	//drain events out so the readEvents goroutine can unblock and exit.
 	s.drainEventsOut()
 	//close channels so receivers can unblock and exit
@@ -106,6 +143,7 @@ func (s *Store) Close() error {
 	close(s.eventsIn)
 	close(s.eventsDelivered)
 	close(s.eventsFailed)
+	<-s.shutdown
 	<-s.shutdown
 	<-s.shutdown
 	<-s.shutdown
@@ -130,7 +168,7 @@ func (s *Store) storeEvents() {
 			}
 		case <-s.stopStore:
 			log.Println("go=store at=shtudown-store")
-		s.shutdown <- true
+			s.shutdown <- true
 			return
 		}
 
@@ -148,7 +186,7 @@ func (s *Store) readEvents() {
 		case <-s.stopRead:
 			log.Println("go=read at=shutdown-read")
 			close(s.eventsOut)
-		s.shutdown <- true
+			s.shutdown <- true
 			return
 		case _, ok := <-s.readTrigger:
 			if ok {
@@ -183,7 +221,7 @@ func (s *Store) cleanEvents() {
 		select {
 		case <-s.stopClean:
 			log.Println("go=clean at=shutdown-clean")
-		s.shutdown <- true
+			s.shutdown <- true
 			return
 		case delivered, ok := <-s.eventsDelivered:
 			if ok {
@@ -209,13 +247,19 @@ func (s *Store) report() {
 		select {
 		case <-s.stopReport:
 			log.Println("go=report at=shutdown-report")
-		s.shutdown <- true
+			read := s.getReadPointer()
+			write := s.getWritePointer()
+			log.Printf("go=report at=shutdown-report read=%d write=%d delta=%d", read, write, write-read)
+			log.Printf("go=report at=shutdown-report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
+			s.shutdown <- true
 			return
 		case _, ok := <-time.After(10 * time.Second):
 			if ok {
 				read := s.getReadPointer()
 				write := s.getWritePointer()
 				log.Printf("go=report at=report read=%d write=%d delta=%d", read, write, write-read)
+				log.Printf("go=report at=report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
+
 			}
 		}
 
@@ -223,8 +267,6 @@ func (s *Store) report() {
 
 	log.Println("go=clean at=exit")
 }
-
-
 
 func (s *Store) writeEvent(seq int64, e *EventIn) error {
 	err := s.db.Update(func(tx *bolt.Tx) error {
@@ -239,7 +281,7 @@ func (s *Store) writeEvent(seq int64, e *EventIn) error {
 			log.Printf("go=store at=put-fail error=%s\n", err)
 			return err
 		}
-
+		_ = s.incrementWrittenToStore()
 		if seq%1000 == 0 {
 			log.Printf("go=store at=wrote sequence=%d", seq)
 		}
@@ -258,6 +300,7 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 		if eventBytes == nil || len(eventBytes) == 0 {
 			return nil
 		} else {
+			_ = s.incrementReadFromStore()
 			if seq%1000 == 0 {
 				log.Printf("go=read at=read sequence=%d", seq)
 			}
@@ -266,7 +309,7 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 				log.Printf("go=read at=decode-fail error=%s\n", err)
 				return err
 			}
-			eventOut = &EventOut{sequence:seq, event:event}
+			eventOut = &EventOut{sequence: seq, event: event}
 			return nil
 		}
 	})
@@ -302,7 +345,6 @@ func (s *Store) drainEventsOut() {
 	}
 }
 
-
 func (s *Store) incrementReadPointer(read int64) {
 	s.readPointerLock.Lock()
 	defer s.readPointerLock.Unlock()
@@ -316,7 +358,6 @@ func (s *Store) setReadPointer(rp int64) {
 	defer s.readPointerLock.Unlock()
 	s.readPointer = rp
 }
-
 
 func (s *Store) incrementWritePointer() {
 	s.writePointerLock.Lock()
@@ -388,4 +429,12 @@ func encodeEvent(evt *Event) ([]byte, error) {
 	return eventBytes.Bytes(), err
 }
 
+func (s *Store) incrementWrittenToStore() int64 {
+	s.writtenToStore++
+	return s.writtenToStore
+}
 
+func (s *Store) incrementReadFromStore() int64 {
+	s.readFromStore++
+	return s.readFromStore
+}

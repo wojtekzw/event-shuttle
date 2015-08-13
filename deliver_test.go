@@ -1,15 +1,16 @@
 package main
 
 import (
-	"testing"
-	"github.com/stretchr/testify/assert"
-	"github.com/sclasen/sarama"
 	"fmt"
-	_ "net/http/pprof"
-	"net/http"
 	"log"
-	"time"
 	"net"
+	"net/http"
+	_ "net/http/pprof"
+	"testing"
+	"time"
+
+	"github.com/Shopify/sarama"
+	"github.com/stretchr/testify/assert"
 )
 
 const localKafka = "localhost:9092"
@@ -46,7 +47,7 @@ func TestNewKafkaDeliver(t *testing.T) {
 		d, err := NewKafkaDeliver(store, "testClientId", []string{localKafka})
 		d.Start()
 		ack := make(chan bool)
-		d.store.EventsInChannel() <- &EventIn{ saved: ack, event: &Event{Channel:"test", Body:[]byte("{}"), } }
+		d.store.EventsInChannel() <- &EventIn{saved: ack, event: &Event{Channel: "test", Body: []byte("{}")}}
 		acked := <-ack
 		assert.True(t, acked, "not acked")
 		time.Sleep(time.Second * 5)

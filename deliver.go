@@ -7,53 +7,65 @@ import (
 	"log"
 )
 
+var maxDeliverGoroutines int = 8
+
 type Deliver interface {
 	Store() *Store
 	Start() error
 	Stop() error
 }
 
-type KafkaDeliver struct{
-	store *Store
-	clientId string
-	brokerList []string
-	clientConfig *sarama.ClientConfig
-	client *sarama.Client
-	producerConfig *sarama.ProducerConfig
-	producer *sarama.Producer
+type KafkaDeliver struct {
+	store             *Store
+	clientId          string
+	brokerList        []string
+	config            *sarama.Config
+	client            sarama.Client
+	producer          sarama.SyncProducer
 	deliverGoroutines int
-	shutdownDeliver chan bool
-	shutdown chan bool
+	shutdownDeliver   chan bool
+	shutdown          chan bool
 }
 
 func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*KafkaDeliver, error) {
 	log.Println("go=kafka at=new-kafka-deliver")
-	clientConfig := sarama.NewClientConfig()
-	producerConfig := sarama.NewProducerConfig()
 
-    client, err := sarama.NewClient(clientId, brokerList, clientConfig)
+	config := sarama.NewConfig()
+
+	config.ClientID = clientId
+	config.Producer.RequiredAcks = sarama.WaitForAll
+
+	client, err := sarama.NewClient(brokerList, config)
 	if err != nil {
 		return nil, err
 	}
 	log.Println("go=kafka at=created-client")
 
-	producer, err := sarama.NewProducer(client, producerConfig)
+	producer, err := sarama.NewSyncProducerFromClient(client)
 	if err != nil {
 		return nil, err
 	}
 	log.Println("go=kafka at=created-producer")
 
+	defer func() {
+		if err != nil {
+			log.Println("go=kafka at=defer-close-producer")
+			if err := producer.Close(); err != nil {
+				log.Fatalln(err)
+			}
+		}
+	}()
+
 	return &KafkaDeliver{
-		clientId: clientId,
-		brokerList: brokerList,
-		store: store,
-		producer: producer,
-		producerConfig: producerConfig,
-		client: client,
-		clientConfig: clientConfig,
-		deliverGoroutines: 8,
-		shutdownDeliver: make(chan bool, 8),
-		shutdown: make(chan bool, 8),
+		clientId:          clientId,
+		brokerList:        brokerList,
+		store:             store,
+		producer:          producer,
+		client:            client,
+		config:            config,
+		deliverGoroutines: maxDeliverGoroutines,
+		shutdownDeliver:   make(chan bool, 8),
+		shutdown:          make(chan bool, 8),
 	}, nil
 
 }
@@ -70,16 +82,19 @@ func (k *KafkaDeliver) Start() error {
 }
 
 func (k *KafkaDeliver) deliverEvents(num int) {
-	for{
+	for {
 		select {
-		case <- k.shutdownDeliver:
+		case <-k.shutdownDeliver:
 			k.shutdown <- true
 			return
 		case event, ok := <-k.store.eventsOut:
 			if ok {
-				err := k.producer.SendMessage(event.event.Channel, nil, sarama.ByteEncoder(event.event.Body))
+				msg := &sarama.ProducerMessage{Topic: event.event.Channel, Value: sarama.ByteEncoder(event.event.Body)}
+				//  FIXME partition i offset 0 co z nimi trzeba zrobić
+				partition, offset, err := k.producer.SendMessage(msg)
+
 				if err != nil {
-					log.Printf("go=deliver num=%d at=send-error error=%v", num, err)
+					log.Printf("go=deliver num=%d at=send-error error=%v,partition=%d, offset=%d", num, err, partition, offset)
 					noAckEvent(k.store, event.sequence)
 				} else {
 					ackEvent(k.store, event.sequence)
@@ -90,7 +105,7 @@ func (k *KafkaDeliver) deliverEvents(num int) {
 }
 
 func ackEvent(store *Store, seq int64) {
-	defer func(){
+	defer func() {
 		if r := recover(); r != nil {
 			log.Println("at=recover-ack-panic")
 		}
@@ -101,7 +116,7 @@ func ackEvent(store *Store, seq int64) {
 }
 
 func noAckEvent(store *Store, seq int64) {
-	defer func(){
+	defer func() {
 		if r := recover(); r != nil {
 			log.Println("at=recover-noack-panic")
 		}
@@ -128,4 +143,3 @@ func (k *KafkaDeliver) Stop() error {
 	}
 	return nil
 }
-
