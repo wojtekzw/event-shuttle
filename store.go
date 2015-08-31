@@ -173,7 +173,6 @@ func (s *Store) storeEvents() {
 		}
 
 	}
-	log.Println("go=store at=exit")
 
 }
 
@@ -209,7 +208,6 @@ func (s *Store) readEvents() {
 		}
 
 	}
-	log.Println("go=read at=exit")
 }
 
 // cleanEvents runs in a goroutine and  recieves from s.eventsDelivered and s.eventsFailed.
@@ -238,8 +236,6 @@ func (s *Store) cleanEvents() {
 			}
 		}
 	}
-
-	log.Println("go=clean at=exit")
 }
 
 func (s *Store) report() {
@@ -254,6 +250,7 @@ func (s *Store) report() {
 			s.shutdown <- true
 			return
 		case _, ok := <-time.After(10 * time.Second):
+
 			if ok {
 				read := s.getReadPointer()
 				write := s.getWritePointer()
@@ -265,7 +262,6 @@ func (s *Store) report() {
 
 	}
 
-	log.Println("go=clean at=exit")
 }
 
 func (s *Store) writeEvent(seq int64, e *EventIn) error {
