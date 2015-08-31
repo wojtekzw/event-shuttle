@@ -1,11 +1,13 @@
 package main
 
 import (
-	"net/http"
 	"crypto/tls"
-	"fmt"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 func KafkaSeedBrokers(exhibitorUrl, kafkaChroot string) ([]string, error) {
@@ -30,14 +32,14 @@ func KafkaSeedBrokers(exhibitorUrl, kafkaChroot string) ([]string, error) {
 		return nil, err
 	}
 
-    var addresses []string
+	var addresses []string
 	for _, broker := range dir {
 		address, err := brokerAddress(client, exhibitorUrl, broker.Key)
 		if err != nil {
-			return  nil, err
+			return nil, err
 		}
-		fmt.Println(address)
-		addresses = append(addresses, address + "/" + kafkaChroot)
+		log.Infoln(address)
+		addresses = append(addresses, address+"/"+kafkaChroot)
 	}
 
 	return addresses, nil
@@ -45,7 +47,7 @@ func KafkaSeedBrokers(exhibitorUrl, kafkaChroot string) ([]string, error) {
 }
 
 func brokerAddress(client *http.Client, exhibitorUrl, zkPath string) (string, error) {
-	seedUrl := fmt.Sprintf("%s/exhibitor/v1/explorer/node-data/?key=%s", exhibitorUrl,  zkPath)
+	seedUrl := fmt.Sprintf("%s/exhibitor/v1/explorer/node-data/?key=%s", exhibitorUrl, zkPath)
 	res2, err := client.Get(seedUrl)
 	if err != nil {
 		return "", err
@@ -71,7 +73,7 @@ func brokerAddress(client *http.Client, exhibitorUrl, zkPath string) (string, er
 	return fmt.Sprintf("%s:%d", seedBroker.Host, seedBroker.Port), nil
 }
 
-type ZkDirEntry struct{
+type ZkDirEntry struct {
 	Title string `json:"title"`
 	Key   string `json:"key"`
 }

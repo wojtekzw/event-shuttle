@@ -4,10 +4,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"os"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 
 	//"github.com/go-zoo/bone"
 	"github.com/bmizerany/pat"
@@ -50,7 +51,7 @@ func (e *Endpoint) PostEvent(w http.ResponseWriter, req *http.Request) {
 					w.Write(SaveErr)
 				}
 			case <-timeout:
-				log.Println("at=post-event-timeout")
+				log.Infoln("at=post-event-timeout")
 				w.WriteHeader(500)
 				w.Write(SaveTimeout)
 			}
@@ -62,7 +63,7 @@ func (e *Endpoint) PostEvent(w http.ResponseWriter, req *http.Request) {
 func (e *Endpoint) sendEvent(event *EventIn) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("at=recover-send-event-panic")
+			log.Errorln("at=recover-send-event-panic")
 			//if we get here, we are shutting down, but the recover stops it, so exit
 			os.Exit(2)
 		}

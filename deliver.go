@@ -2,9 +2,8 @@ package main
 
 import (
 	"github.com/Shopify/sarama"
-	//"net"
-	//"time"
-	"log"
+
+	log "github.com/Sirupsen/logrus"
 )
 
 var maxDeliverGoroutines int = 8
@@ -28,7 +27,7 @@ type KafkaDeliver struct {
 }
 
 func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*KafkaDeliver, error) {
-	log.Println("go=kafka at=new-kafka-deliver")
+	log.Debugf("go=kafka at=new-kafka-deliver\n")
 
 	config := sarama.NewConfig()
 
@@ -39,19 +38,19 @@ func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*Kafka
 	if err != nil {
 		return nil, err
 	}
-	log.Println("go=kafka at=created-client")
+	log.Debugf("go=kafka at=created-client\n")
 
 	producer, err := sarama.NewSyncProducerFromClient(client)
 	if err != nil {
 		return nil, err
 	}
-	log.Println("go=kafka at=created-producer")
+	log.Debugf("go=kafka at=created-producer\n")
 
 	defer func() {
 		if err != nil {
-			log.Println("go=kafka at=defer-close-producer")
+			log.Errorf("go=kafka at=defer-close-producer after error %v\n", err)
 			if err := producer.Close(); err != nil {
-				log.Fatalln(err)
+				log.Fatalf("go=kafka at=producer-close fatal error %v\n", err)
 			}
 		}
 	}()
@@ -90,11 +89,10 @@ func (k *KafkaDeliver) deliverEvents(num int) {
 		case event, ok := <-k.store.eventsOut:
 			if ok {
 				msg := &sarama.ProducerMessage{Topic: event.event.Channel, Value: sarama.ByteEncoder(event.event.Body)}
-				//  FIXME partition i offset 0 co z nimi trzeba zrobić
 				partition, offset, err := k.producer.SendMessage(msg)
 
 				if err != nil {
-					log.Printf("go=deliver num=%d at=send-error error=%v,partition=%d, offset=%d", num, err, partition, offset)
+					log.Errorf("go=deliver num=%d at=send-error error=%v,partition=%d, offset=%d", num, err, partition, offset)
 					noAckEvent(k.store, event.sequence)
 				} else {
 					ackEvent(k.store, event.sequence)
@@ -107,7 +105,7 @@ func (k *KafkaDeliver) deliverEvents(num int) {
 func ackEvent(store *Store, seq int64) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("at=recover-ack-panic")
+			log.Errorf("at=recover-ack-panic\n")
 		}
 	}()
 	// the store owns the ack channel and can close it on shutdown
@@ -118,7 +116,7 @@ func ackEvent(store *Store, seq int64) {
 func noAckEvent(store *Store, seq int64) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Println("at=recover-noack-panic")
+			log.Errorf("at=recover-noack-panic\n")
 		}
 	}()
 	// the store owns the noAck channel and can close it on shutdown

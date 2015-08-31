@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/gob"
-	"log"
 	"math"
 	"sync"
 	"time"
+
+	log "github.com/Sirupsen/logrus"
 
 	"github.com/boltdb/bolt"
 )
@@ -51,16 +52,16 @@ func (s *Store) syncStore() {
 	for {
 		select {
 		case <-s.stopSync:
-			log.Println("go=sync at=shtudown-sync")
+			log.Debugf("go=sync at=shtudown-sync\n")
 			s.shutdown <- true
 			return
 		case _, ok := <-time.After(10 * time.Second):
 			if ok {
 				err := s.syncDB()
 				if err != nil {
-					log.Printf("go=sync at=sync-interval db sync error=%v ", err)
+					log.Errorf("go=sync at=sync-interval db sync error=%v ", err)
 				} else {
-					log.Printf("go=sync at=sync-interval db sync OK ")
+					log.Debugf("go=sync at=sync-interval db sync OK\n")
 
 				}
 
@@ -71,14 +72,14 @@ func (s *Store) syncStore() {
 }
 
 func OpenStore(dbFile string) (*Store, error) {
-	log.Printf("go=open at=open-db\n")
+	log.Debugf("go=open at=open-db\n")
 	db, err := bolt.Open(dbFile, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	// Do not sync every insert
 	// Do sync every 10 seconds
 	db.NoSync = true
 
 	if err != nil {
-		log.Printf("go=open at=error-openiing-db error=%s\n", err)
+		log.Errorf("go=open at=error-opening-db error=%s\n", err)
 		return nil, err
 	}
 
@@ -88,7 +89,7 @@ func OpenStore(dbFile string) (*Store, error) {
 	})
 
 	if err != nil {
-		log.Printf("go=open at=error-creating-bucket error=%s\n", err)
+		log.Errorf("go=open at=error-creating-bucket error=%s\n", err)
 		return nil, err
 	}
 
@@ -96,10 +97,21 @@ func OpenStore(dbFile string) (*Store, error) {
 
 	lastWritePointer, readPointer, err := findReadAndWritePointers(db)
 	if err != nil {
-		log.Printf("go=open at=read-pointers-error error=%s\n", err)
+		log.Errorf("go=open at=read-pointers-error error=%s\n", err)
 		return nil, err
 	}
-	log.Printf("go=open at=read-pointers read=%d write=%d\n", readPointer, lastWritePointer+1)
+	// FIXME - what is it about this +1 i write and read pointers
+
+	lastWritePointerPlusOne := lastWritePointer + 1
+	if lastWritePointerPlusOne < readPointer {
+		log.Fatalf("go=open error lastWritePointer:%d < readPointer:%d", lastWritePointerPlusOne, readPointer)
+	}
+
+	if lastWritePointerPlusOne > readPointer {
+		log.Errorf("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", lastWritePointerPlusOne, readPointer, lastWritePointerPlusOne-readPointer)
+	}
+
+	log.Infof("go=open at=read-pointers read=%d write=%d\n", readPointer, lastWritePointerPlusOne)
 
 	store := &Store{
 		db:              db,
@@ -125,7 +137,7 @@ func OpenStore(dbFile string) (*Store, error) {
 	go store.syncStore()
 
 	store.readTrigger <- true
-	log.Printf("go=open at=store-created")
+	log.Debugf("go=open at=store-created")
 	return store, nil
 }
 
@@ -162,12 +174,12 @@ func (s *Store) storeEvents() {
 					s.incrementWritePointer()
 					s.triggerRead()
 				} else {
-					log.Printf("go=store at=write-error error=%s", err)
+					log.Errorf("go=store at=write-error error=%s", err)
 				}
 				e.saved <- err == nil
 			}
 		case <-s.stopStore:
-			log.Println("go=store at=shtudown-store")
+			log.Debugf("go=store at=shtudown-store\n")
 			s.shutdown <- true
 			return
 		}
@@ -183,7 +195,7 @@ func (s *Store) readEvents() {
 	for {
 		select {
 		case <-s.stopRead:
-			log.Println("go=read at=shutdown-read")
+			log.Debugf("go=read at=shutdown-read\n")
 			close(s.eventsOut)
 			s.shutdown <- true
 			return
@@ -202,7 +214,7 @@ func (s *Store) readEvents() {
 				}
 
 				if err != nil {
-					log.Printf("go=read at=read-error error=%s", err)
+					log.Errorf("go=read at=read-error error=%s", err)
 				}
 			}
 		}
@@ -218,13 +230,13 @@ func (s *Store) cleanEvents() {
 	for {
 		select {
 		case <-s.stopClean:
-			log.Println("go=clean at=shutdown-clean")
+			log.Debugf("go=clean at=shutdown-clean\n")
 			s.shutdown <- true
 			return
 		case delivered, ok := <-s.eventsDelivered:
 			if ok {
 				if delivered%1000 == 0 {
-					log.Printf("go=clean at=delete sequence=%d", delivered)
+					log.Infof("go=clean at=delete sequence=%d", delivered)
 				}
 				s.deleteEvent(delivered)
 			}
@@ -242,11 +254,11 @@ func (s *Store) report() {
 	for {
 		select {
 		case <-s.stopReport:
-			log.Println("go=report at=shutdown-report")
+			log.Debugf("go=report at=shutdown-report\n")
 			read := s.getReadPointer()
 			write := s.getWritePointer()
-			log.Printf("go=report at=shutdown-report read=%d write=%d delta=%d", read, write, write-read)
-			log.Printf("go=report at=shutdown-report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
+			log.Infof("go=report at=shutdown-report read=%d write=%d delta=%d", read, write, write-read)
+			log.Infof("go=report at=shutdown-report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
 			s.shutdown <- true
 			return
 		case _, ok := <-time.After(10 * time.Second):
@@ -254,8 +266,8 @@ func (s *Store) report() {
 			if ok {
 				read := s.getReadPointer()
 				write := s.getWritePointer()
-				log.Printf("go=report at=report read=%d write=%d delta=%d", read, write, write-read)
-				log.Printf("go=report at=report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
+				log.Infof("go=report at=report read=%d write=%d delta=%d", read, write, write-read)
+				log.Infof("go=report at=report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
 
 			}
 		}
@@ -269,17 +281,17 @@ func (s *Store) writeEvent(seq int64, e *EventIn) error {
 		bucket := tx.Bucket(EVENTS_BUCKET)
 		encoded, err := encodeEvent(e.event)
 		if err != nil {
-			log.Printf("go=store at=encode-fail error=%s\n", err)
+			log.Errorf("go=store at=encode-fail error=%s\n", err)
 			return err
 		}
 		err = bucket.Put(writeSequence(seq), encoded)
 		if err != nil {
-			log.Printf("go=store at=put-fail error=%s\n", err)
+			log.Errorf("go=store at=put-fail error=%s\n", err)
 			return err
 		}
 		_ = s.incrementWrittenToStore()
 		if seq%1000 == 0 {
-			log.Printf("go=store at=wrote sequence=%d", seq)
+			log.Infof("go=store at=wrote sequence=%d", seq)
 		}
 		return nil
 
@@ -298,11 +310,11 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 		} else {
 			_ = s.incrementReadFromStore()
 			if seq%1000 == 0 {
-				log.Printf("go=read at=read sequence=%d", seq)
+				log.Infof("go=read at=read sequence=%d", seq)
 			}
 			event, err := decodeEvent(eventBytes)
 			if err != nil {
-				log.Printf("go=read at=decode-fail error=%s\n", err)
+				log.Errorf("go=read at=decode-fail error=%s\n", err)
 				return err
 			}
 			eventOut = &EventOut{sequence: seq, event: event}
@@ -320,7 +332,7 @@ func (s *Store) deleteEvent(seq int64) error {
 
 	})
 	if err != nil {
-		log.Printf("go=delete at=delete-error error=%s", err)
+		log.Errorf("go=delete at=delete-error error=%s", err)
 	}
 	return err
 }

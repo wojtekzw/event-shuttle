@@ -2,8 +2,6 @@ package main
 
 import (
 	"flag"
-	"io/ioutil"
-	"log"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
@@ -11,13 +9,15 @@ import (
 	"strings"
 	"syscall"
 
+	log "github.com/Sirupsen/logrus"
+
 	"net/http"
 )
 
 func main() {
 
 	runtime.GOMAXPROCS(2)
-	log.Printf("at=main, MaxParallelism=%d\n", MaxParallelism())
+	log.Debugf("at=main, MaxParallelism=%d\n", MaxParallelism())
 
 	exhibitor := flag.Bool("exhibitor", false, "use EXHIBITOR_URL from env to lookup seed brokers")
 	brokers := flag.String("brokers", "", "comma seperated list of ip:port to use as seed brokers")
@@ -26,16 +26,16 @@ func main() {
 	debug := flag.Bool("debug", false, "start a pprof http server on 6060")
 
 	flag.Parse()
+	logLevel := log.ErrorLevel
 
 	if *debug {
 		go func() {
 			http.ListenAndServe("localhost:6060", nil)
 		}()
+		logLevel = log.DebugLevel
 	}
 
-	if !*debug {
-		log.SetOutput(ioutil.Discard)
-	}
+	initLog(logLevel)
 
 	exitChan := make(chan os.Signal)
 
@@ -46,7 +46,7 @@ func main() {
 
 	store, err := OpenStore(*db)
 	if err != nil {
-		log.Panicf("unable to open events.db, exiting! %v\n", err)
+		log.Panicf("unable to open %s, exiting! %v\n", *db, err)
 	}
 
 	var brokerList []string
@@ -71,14 +71,13 @@ func main() {
 
 	select {
 	case sig := <-exitChan:
-		log.Printf("go=main at=received-signal signal=%s\n", sig)
+		log.Debugf("go=main at=received-signal signal=%s\n", sig)
 		err := store.Close()
 		deliver.Stop()
 		if err != nil {
-			log.Printf("go=main at=store-close-error error=%s\n", err)
-			os.Exit(1)
+			log.Fatalf("go=main at=store-close-error error=%s\n", err)
 		} else {
-			log.Printf("go=main at=store-closed-cleanly \n")
+			log.Debugf("go=main at=store-closed-cleanly \n")
 		}
 	}
 
@@ -106,4 +105,19 @@ func MaxParallelism() int {
 		return maxProcs
 	}
 	return numCPU
+}
+
+func initLog(logLevel log.Level) {
+	// Log as JSON instead of the default ASCII formatter.
+	log.SetFormatter(&log.JSONFormatter{})
+
+	// Use the Airbrake hook to report errors that have Error severity or above to
+	// an exception tracker. You can create custom hooks, see the Hooks section.
+	// log.AddHook(airbrake.NewHook("https://example.com", "xyz", "development"))
+
+	// Output to stderr instead of stdout, could also be a file.
+	log.SetOutput(os.Stderr)
+
+	// Only log the warning severity or above.
+	log.SetLevel(logLevel)
 }

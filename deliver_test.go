@@ -2,23 +2,29 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"testing"
 	"time"
 
+	log "github.com/Sirupsen/logrus"
+
 	"github.com/Shopify/sarama"
 	"github.com/stretchr/testify/assert"
 )
 
-const localKafka = "localhost:9092"
+// const localKafka = "localhost:9092"
+const localKafka = "192.168.99.100:32800"
+
+func init() {
+	initLog(log.DebugLevel)
+}
 
 func kafkaIsUp() bool {
 	conn, err := net.Dial("tcp", localKafka)
 	if err != nil {
-		log.Printf("Kakfa does not appear to be up on %s, skipping this test", localKafka)
+		log.Errorf("Kafka does not appear to be up on %s, skipping this test", localKafka)
 		return false
 	} else {
 		conn.Close()
@@ -27,6 +33,7 @@ func kafkaIsUp() bool {
 }
 
 func TestKafkaConfig(t *testing.T) {
+
 	if kafkaIsUp() {
 		d, err := NewKafkaDeliver(nil, "testClientId", []string{localKafka})
 		assert.Nil(t, err, fmt.Sprintf("%v+", err))
@@ -44,7 +51,7 @@ func TestNewKafkaDeliver(t *testing.T) {
 		store, err := OpenStore("test.db")
 		assert.Nil(t, err, err)
 		go func() {
-			log.Println(http.ListenAndServe("localhost:6060", nil))
+			log.Debugf("Error creating http server %v\n", http.ListenAndServe("localhost:6060", nil))
 		}()
 		d, err := NewKafkaDeliver(store, "testClientId", []string{localKafka})
 		d.Start()

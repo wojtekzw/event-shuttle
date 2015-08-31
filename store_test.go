@@ -1,18 +1,21 @@
 package main
 
-import "github.com/bmizerany/assert"
-import _ "net/http/pprof"
-
-
 import (
-	"testing"
-	"log"
 	_ "regexp" //makes things work with go -race
+	"testing"
 
-	"net/http"
 	"fmt"
+	"net/http"
+
+	_ "net/http/pprof"
+
+	log "github.com/Sirupsen/logrus"
+	"github.com/bmizerany/assert"
 )
 
+func init() {
+	initLog(log.DebugLevel)
+}
 
 func TestSerialize(t *testing.T) {
 	for i := 1; i < 100000; i++ {
@@ -22,20 +25,20 @@ func TestSerialize(t *testing.T) {
 	}
 }
 
-func TestEncodeDecodeEvent(t *testing.T){
+func TestEncodeDecodeEvent(t *testing.T) {
 	event := &Event{Channel: "test123", Body: []byte("test123")}
 	encoded, err := encodeEvent(event)
 	assert.T(t, err == nil, err)
-    decoded, err := decodeEvent(encoded)
+	decoded, err := decodeEvent(encoded)
 	assert.T(t, err == nil, err)
 	assert.T(t, event.Channel == decoded.Channel, fmt.Sprintf("%v+ %v+", event, decoded))
 	assert.T(t, string(event.Body) == string(decoded.Body), fmt.Sprintf("%v+ %v+", event, decoded))
 }
 
-
 func TestOpenCloseStore(t *testing.T) {
+
 	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
+		log.Debugf("Error creating http server %v\n", http.ListenAndServe("localhost:6060", nil))
 	}()
 	for i := 0; i < 100; i++ {
 		store, err := OpenStore("test.db")
@@ -43,12 +46,12 @@ func TestOpenCloseStore(t *testing.T) {
 		init := store.getWritePointer()
 		acks := make(chan bool)
 		for i := 0; i < 100; i++ {
-			store.EventsInChannel() <- &EventIn{ event: &Event{ Channel:"test", Body:[]byte("BODY") }, saved:acks}
+			store.EventsInChannel() <- &EventIn{event: &Event{Channel: "test", Body: []byte("BODY")}, saved: acks}
 			<-acks
 		}
 		curr := store.getWritePointer()
 		assert.Equal(t, init+100, curr)
-		log.Println("CLOSING")
+		log.Debugf("Test CLOSING\n")
 		store.Close()
 
 		store, err = OpenStore("test.db")
@@ -59,18 +62,15 @@ func TestOpenCloseStore(t *testing.T) {
 	}
 }
 
-
 func BenchmarkEvents(b *testing.B) {
 	store, _ := OpenStore("test.db")
 	acks := make(chan bool)
 	b.ResetTimer()
-	for i := 0; i < b.N ; i++ {
-		store.EventsInChannel() <- &EventIn{ event: &Event {Channel:"test", Body:[]byte("BODY")}, saved:acks}
+	for i := 0; i < b.N; i++ {
+		store.EventsInChannel() <- &EventIn{event: &Event{Channel: "test", Body: []byte("BODY")}, saved: acks}
 		<-acks
 	}
 	b.StopTimer()
-	log.Println("CLOSING")
+	log.Debugf("Test CLOSING\n")
 	store.Close()
 }
-
-
