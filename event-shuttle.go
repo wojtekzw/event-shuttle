@@ -2,6 +2,7 @@ package main
 
 import (
 	"flag"
+	"io/ioutil"
 	"log"
 	_ "net/http/pprof"
 	"os"
@@ -32,6 +33,10 @@ func main() {
 		}()
 	}
 
+	if !*debug {
+		log.SetOutput(ioutil.Discard)
+	}
+
 	exitChan := make(chan os.Signal)
 
 	signal.Notify(exitChan, syscall.SIGHUP,
@@ -43,8 +48,6 @@ func main() {
 	if err != nil {
 		log.Panicf("unable to open events.db, exiting! %v\n", err)
 	}
-
-	store.db.NoSync = true
 
 	var brokerList []string
 
