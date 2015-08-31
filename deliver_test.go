@@ -31,8 +31,10 @@ func TestKafkaConfig(t *testing.T) {
 		d, err := NewKafkaDeliver(nil, "testClientId", []string{localKafka})
 		assert.Nil(t, err, fmt.Sprintf("%v+", err))
 		for i := 0; i < 10000; i++ {
-			err = d.producer.SendMessage("test", nil, sarama.StringEncoder("hello world"))
-			assert.Nil(t, err, fmt.Sprintf("%v+", err))
+			// err = d.producer.SendMessage("test", nil, sarama.StringEncoder("hello world"))
+			msg := &sarama.ProducerMessage{Topic: "test", Value: sarama.StringEncoder("hellow world")}
+			partition, offset, err := d.producer.SendMessage(msg)
+			assert.Nil(t, err, fmt.Sprintf("Partition:%d, Offset:%d, Error:%v+", partition, offset, err))
 		}
 	}
 }
