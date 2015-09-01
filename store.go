@@ -17,10 +17,10 @@ var EVENTS_BUCKET = []byte("events")
 
 type Store struct {
 	db               *bolt.DB
-	eventsIn         chan *EventIn
-	eventsOut        chan *EventOut
-	eventsDelivered  chan int64
-	eventsFailed     chan int64
+	eventsIn         chan *EventIn  // full event to store in BoltDB goes into this channel
+	eventsOut        chan *EventOut // full event read from BoltDB and to be delivered to outside system
+	eventsDelivered  chan int64     // sequence number (key) of succesfully delivered event goes into this channel
+	eventsFailed     chan int64     // sequence number (key) of failed event (not delivered to outside system) goes into this channel
 	readPointer      int64
 	readPointerLock  sync.RWMutex
 	readFromStore    int64
@@ -48,6 +48,9 @@ func (s *Store) syncDB() error {
 	return s.db.Sync()
 }
 
+// syncStore runs in a goroutine and and makes BoltDB sync every 10 seconds if it was opened with
+// noSync=true option for better preformance and greater risk
+// It waits for signal on s.stopSync channel to stop itself
 func (s *Store) syncStore() {
 	for {
 		select {
@@ -71,6 +74,8 @@ func (s *Store) syncStore() {
 	}
 }
 
+// OpenStore opens BoildDB database creating database and bucket if not exists
+// sets writePointer and readPointer from Bolt - to enable sending out events that still sit in database
 func OpenStore(dbFile string) (*Store, error) {
 	log.Debugf("go=open at=open-db\n")
 	db, err := bolt.Open(dbFile, 0600, &bolt.Options{Timeout: 1 * time.Second})
@@ -95,12 +100,15 @@ func OpenStore(dbFile string) (*Store, error) {
 
 	gob.Register(Event{})
 
+	// lastWritePointer - the last sequence number of event stored in BoldDB -  we should write to BoldDB with NEXT number
+	// writePointer = lastWritePointer +1
+	// readPointer - lowest sequence nmber of event in BoldDB - we should read from BoldDB from THIS number
 	lastWritePointer, readPointer, err := findReadAndWritePointers(db)
 	if err != nil {
 		log.Errorf("go=open at=read-pointers-error error=%s\n", err)
 		return nil, err
 	}
-	// FIXME - what is it about this +1 i write and read pointers
+	// FIXME - refactor names bellow
 
 	lastWritePointerPlusOne := lastWritePointer + 1
 	if lastWritePointerPlusOne < readPointer {
@@ -141,6 +149,8 @@ func OpenStore(dbFile string) (*Store, error) {
 	return store, nil
 }
 
+// Close - closes all goroutines by sending signals over respective channels
+// for goroutines to close themselves and at last closes teh Bolt database
 func (s *Store) Close() error {
 	s.stopStore <- true
 	s.stopClean <- true
@@ -148,6 +158,9 @@ func (s *Store) Close() error {
 	s.stopReport <- true
 	s.stopSync <- true
 	//drain events out so the readEvents goroutine can unblock and exit.
+	//discard event read from bolt but still not delivered to the outside system
+	//they will be sent on next application start- as thet are still sitting in bolt
+	//because they are not confirmed to be delivered outside
 	s.drainEventsOut()
 	//close channels so receivers can unblock and exit
 	//external senders should wrap sends in a recover so they dont panic
@@ -163,7 +176,8 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// store events runs in a goroutine and receives from s.eventsIn and saves events to bolt
+// storeEvents runs in a goroutine and receives from s.eventsIn and saves events to bolt
+// It waits for signal on s.stopStore channel to stop itself
 func (s *Store) storeEvents() {
 	for {
 		select {
@@ -189,8 +203,9 @@ func (s *Store) storeEvents() {
 }
 
 // readEvents runs in a goroutine and reads events from boltdb and sends them on s.eventsOut
-// it also receives from the events reRead channel and resends on s.eventsOut
-// it is the owning sender for s.eventsOut, so it closes the channel on shutdown.
+// it also sends event to itself via s.readTrigger to trigger new read attemps. This mechanism
+// keeps it in busy loop until there are no events in boltdb
+// It waits for signal on s.stopRead channel to stop itself
 func (s *Store) readEvents() {
 	for {
 		select {
@@ -222,10 +237,11 @@ func (s *Store) readEvents() {
 	}
 }
 
-// cleanEvents runs in a goroutine and  recieves from s.eventsDelivered and s.eventsFailed.
+// cleanEvents runs in a goroutine and  recieves from channels s.eventsDelivered and s.eventsFailed.
 // for delivered events it removes the event from bolt
-// for failed events it reReads the event and sends it on
-// owning sender for s.eventsReRead so it closes it on shutdown
+// for failed events it sets readPointer to the value of the failed event if the sequence of
+// failed event is lower then readPointer so it can be read again
+// It waits for signal on s.stopClean channel to stop itself
 func (s *Store) cleanEvents() {
 	for {
 		select {
@@ -250,6 +266,10 @@ func (s *Store) cleanEvents() {
 	}
 }
 
+// report  - logs read and write pointer numbers every 10 seconds
+// This shows if there are any events in boltdb
+// If boltdb is empty it will print equal numbers
+// It waits for signal on s.stopReport channel to stop itself
 func (s *Store) report() {
 	for {
 		select {
@@ -276,6 +296,7 @@ func (s *Store) report() {
 
 }
 
+// writeEvent - store one event in boltdb
 func (s *Store) writeEvent(seq int64, e *EventIn) error {
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(EVENTS_BUCKET)
@@ -299,7 +320,7 @@ func (s *Store) writeEvent(seq int64, e *EventIn) error {
 	return err
 }
 
-// reRead event reads an event that was reported to have failed to be delivered and reSends it on s.eventsReRead
+// readEvent - read one event from bolt
 func (s *Store) readEvent(seq int64) (*EventOut, error) {
 	var eventOut *EventOut
 	err := s.db.Update(func(tx *bolt.Tx) error {
@@ -324,6 +345,7 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 	return eventOut, err
 }
 
+// deleteEvent - delete one event from bolt
 func (s *Store) deleteEvent(seq int64) error {
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		events := tx.Bucket(EVENTS_BUCKET)
@@ -385,6 +407,9 @@ func (s *Store) getWritePointer() int64 {
 	return s.writePointer
 }
 
+// find: lowest sequence number in bolt - that means earliest unread event to be sent outside
+// and highest sequence number in bolt - that means last written event number to bolt. Next write to bolt
+// MUST be at writePointer+1
 func findReadAndWritePointers(db *bolt.DB) (int64, int64, error) {
 	writePointer := int64(0)
 	readPointer := int64(math.MaxInt64)
