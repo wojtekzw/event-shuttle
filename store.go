@@ -108,18 +108,19 @@ func OpenStore(dbFile string) (*Store, error) {
 		log.Errorf("go=open at=read-pointers-error error=%s\n", err)
 		return nil, err
 	}
-	// FIXME - refactor names bellow
 
-	lastWritePointerPlusOne := lastWritePointer + 1
-	if lastWritePointerPlusOne < readPointer {
-		log.Fatalf("go=open error lastWritePointer:%d < readPointer:%d", lastWritePointerPlusOne, readPointer)
+	// increment writePointer to point to new value
+	writePointer := lastWritePointer + 1
+
+	if writePointer < readPointer {
+		log.Fatalf("go=open error lastWritePointer:%d < readPointer:%d", writePointer, readPointer)
 	}
 
-	if lastWritePointerPlusOne > readPointer {
-		log.Errorf("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", lastWritePointerPlusOne, readPointer, lastWritePointerPlusOne-readPointer)
+	if writePointer > readPointer {
+		log.Errorf("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", writePointer, readPointer, writePointer-readPointer)
 	}
 
-	log.Infof("go=open at=read-pointers read=%d write=%d\n", readPointer, lastWritePointerPlusOne)
+	log.Infof("go=open at=read-pointers read=%d write=%d\n", readPointer, writePointer)
 
 	store := &Store{
 		db:              db,
@@ -127,7 +128,7 @@ func OpenStore(dbFile string) (*Store, error) {
 		eventsOut:       make(chan *EventOut, 32),
 		eventsDelivered: make(chan int64, 32),
 		eventsFailed:    make(chan int64, 32),
-		writePointer:    lastWritePointer + 1,
+		writePointer:    writePointer,
 		readPointer:     readPointer,
 		readTrigger:     make(chan bool, 1), //buffered so reader can send to itself
 		stopStore:       make(chan bool, 1),
@@ -407,21 +408,21 @@ func (s *Store) getWritePointer() int64 {
 	return s.writePointer
 }
 
-// find: lowest sequence number in bolt - that means earliest unread event to be sent outside
-// and highest sequence number in bolt - that means last written event number to bolt. Next write to bolt
-// MUST be at writePointer+1
+// find: lowest sequence number in bolt (currentReadPointer) - that means earliest unread event to be sent outside
+// and highest sequence number in bolt (lastWritePointer)- that means last written event number to bolt. Next write to bolt
+// MUST be at lastWritePointer+1
 func findReadAndWritePointers(db *bolt.DB) (int64, int64, error) {
-	writePointer := int64(0)
-	readPointer := int64(math.MaxInt64)
+	lastWritePointer := int64(0)
+	currentReadPointer := int64(math.MaxInt64)
 	err := db.View(func(tx *bolt.Tx) error {
 		events := tx.Bucket(EVENTS_BUCKET)
 		err := events.ForEach(func(k, v []byte) error {
 			seq, _ := readSequence(k)
-			if seq > writePointer {
-				writePointer = seq
+			if seq > lastWritePointer {
+				lastWritePointer = seq
 			}
-			if seq < readPointer {
-				readPointer = seq
+			if seq < currentReadPointer {
+				currentReadPointer = seq
 			}
 			return nil
 		})
@@ -433,11 +434,11 @@ func findReadAndWritePointers(db *bolt.DB) (int64, int64, error) {
 		return -1, -1, err
 	}
 
-	if readPointer == int64(math.MaxInt64) {
-		readPointer = int64(1)
+	if currentReadPointer == int64(math.MaxInt64) {
+		currentReadPointer = int64(1)
 	}
 
-	return writePointer, readPointer, nil
+	return lastWritePointer, currentReadPointer, nil
 }
 
 func readSequence(seq []byte) (int64, error) {
