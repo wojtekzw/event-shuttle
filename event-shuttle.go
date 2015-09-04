@@ -26,7 +26,8 @@ func main() {
 	debug := flag.Bool("debug", false, "start a pprof http server on 6060")
 
 	flag.Parse()
-	logLevel := log.ErrorLevel
+	// logLevel := log.ErrorLevel
+	logLevel := log.DebugLevel
 
 	if *debug {
 		go func() {
@@ -62,18 +63,24 @@ func main() {
 	}
 
 	deliver, err := NewKafkaDeliver(store, "test", brokerList)
+	degradedMode := false
 	if err != nil {
-		log.Panicf("unable to create KafkaDeliver, exiting! %v\n", err)
+		log.Errorf("unable to create KafkaDeliver: %v, runing in DEGRADED mode (saving events to BoldDB)\n", err)
+		degradedMode = true
 	}
 
-	deliver.Start()
+	if !degradedMode {
+		deliver.Start()
+	}
 	StartEndpoint(*port, store)
 
 	select {
 	case sig := <-exitChan:
 		log.Debugf("go=main at=received-signal signal=%s\n", sig)
 		err := store.Close()
-		deliver.Stop()
+		if !degradedMode {
+			deliver.Stop()
+		}
 		if err != nil {
 			log.Fatalf("go=main at=store-close-error error=%s\n", err)
 		} else {
@@ -109,7 +116,7 @@ func MaxParallelism() int {
 
 func initLog(logLevel log.Level) {
 	// Log as JSON instead of the default ASCII formatter.
-	log.SetFormatter(&log.JSONFormatter{})
+	// log.SetFormatter(&log.JSONFormatter{})
 
 	// Use the Airbrake hook to report errors that have Error severity or above to
 	// an exception tracker. You can create custom hooks, see the Hooks section.
