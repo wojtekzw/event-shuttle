@@ -63,8 +63,8 @@ func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*Kafka
 		client:            client,
 		config:            config,
 		deliverGoroutines: maxDeliverGoroutines,
-		shutdownDeliver:   make(chan bool, 8),
-		shutdown:          make(chan bool, 8),
+		shutdownDeliver:   make(chan bool, maxDeliverGoroutines),
+		shutdown:          make(chan bool, maxDeliverGoroutines),
 	}, nil
 
 }
