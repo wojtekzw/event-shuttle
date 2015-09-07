@@ -110,6 +110,15 @@ func OpenStore(dbFile string) (*Store, error) {
 	}
 
 	// increment writePointer to point to new value
+	// Fatal error if wrtePointe is MaxInit64 or < 0
+	if lastWritePointer == math.MaxInt64 {
+		log.Fatalf("go=open error Max number of lastWritePointer: %d", lastWritePointer)
+	}
+
+	if lastWritePointer < 0 {
+		log.Fatalf("go=open error invalid value of lastWritePointer: %d", lastWritePointer)
+	}
+
 	writePointer := lastWritePointer + 1
 
 	if writePointer < readPointer {
@@ -393,7 +402,13 @@ func (s *Store) setReadPointer(rp int64) {
 func (s *Store) incrementWritePointer() {
 	s.writePointerLock.Lock()
 	defer s.writePointerLock.Unlock()
+
+	if s.writePointer == math.MaxInt64 {
+		log.Fatalf("go=incrementWritePointer Max number (MaxIni64): %d", s.writePointer)
+	}
+
 	s.writePointer += 1
+
 }
 
 func (s *Store) getReadPointer() int64 {
