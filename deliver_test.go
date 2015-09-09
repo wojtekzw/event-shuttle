@@ -8,18 +8,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Shopify/sarama"
+
 	log "github.com/Sirupsen/logrus"
 
-	"github.com/Shopify/sarama"
 	"github.com/stretchr/testify/assert"
 )
 
-// const localKafka = "localhost:9092"
-const localKafka = "192.168.99.100:32800"
+const localKafka = "localhost:9092"
 
 func init() {
-	initLog(log.DebugLevel)
-}
+-       initLog(log.DebugLevel)
+-}
 
 func kafkaIsUp() bool {
 	conn, err := net.Dial("tcp", localKafka)
@@ -33,7 +33,6 @@ func kafkaIsUp() bool {
 }
 
 func TestKafkaConfig(t *testing.T) {
-
 	if kafkaIsUp() {
 		d, err := NewKafkaDeliver(nil, "testClientId", []string{localKafka})
 		assert.Nil(t, err, fmt.Sprintf("%v+", err))
