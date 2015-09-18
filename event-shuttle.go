@@ -1,7 +1,7 @@
 package main
 
 import (
-	"flag"
+	"fmt"
 	_ "net/http/pprof"
 	"os"
 	"os/signal"
@@ -9,35 +9,63 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/spf13/cobra"
+
 	log "github.com/Sirupsen/logrus"
 
 	"net/http"
 )
 
-func main() {
+const (
+	AppName    = "event-shuttle"
+	AppVersion = "0.1"
+	AppDate    = "2015-09-17"
 
-	runtime.GOMAXPROCS(2)
-	log.Debugf("at=main, MaxParallelism=%d\n", MaxParallelism())
+	DefaultKafkaBrokers      = "192.168.99.100:9092"
+	DefaultBoltName          = "events.db"
+	DefaultListeningHTTPPort = "3887"
+	DefaultDebugMode         = false
+	DefaultClientName        = AppName + AppVersion
+	DefaultLogLevel          = "warn"
+	DefaultAllowDegradedMode = false
+)
 
-	exhibitor := flag.Bool("exhibitor", false, "use EXHIBITOR_URL from env to lookup seed brokers")
-	brokers := flag.String("brokers", "", "comma seperated list of ip:port to use as seed brokers")
-	db := flag.String("db", "events.db", "name of the boltdb database file")
-	port := flag.String("port", "3887", "port on which to listen for events")
-	debug := flag.Bool("debug", false, "start a pprof http server on 6060")
+var (
+	exhibitor         bool
+	kafkaBrokers      string
+	db                string
+	port              string
+	debug             bool
+	logLevel          string
+	cpu               int
+	allowDegradedMode bool
 
-	flag.Parse()
-	// logLevel := log.ErrorLevel
-	logLevel := log.DebugLevel
+	degradedMode bool
+	deliver      *KafkaDeliver
+	store        *Store
+	brokerList   []string
+)
 
-	if *debug {
+func runApp(cmd *cobra.Command, args []string) {
+
+	// check logLevel values and set initLogLevel
+	initLogLevel, err := log.ParseLevel(logLevel)
+	if err != nil {
+		fmt.Printf("Wrong loglevel value %s\n", logLevel)
+		fmt.Println(cmd.Flags().Lookup("allow-degraded-mode").Usage)
+		os.Exit(1)
+	}
+	initLog(initLogLevel)
+
+	//  check debug
+	if debug {
 		go func() {
 			http.ListenAndServe("localhost:6060", nil)
 		}()
-		logLevel = log.DebugLevel
+		initLogLevel = log.DebugLevel
 	}
 
-	initLog(logLevel)
-
+	//  make signal channels for gracefull termination
 	exitChan := make(chan os.Signal)
 
 	signal.Notify(exitChan, syscall.SIGHUP,
@@ -45,39 +73,60 @@ func main() {
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	store, err := OpenStore(*db)
-	if err != nil {
-		log.Panicf("unable to open %s, exiting! %v\n", *db, err)
+	// check db name & store init
+	if db == "" {
+		log.Printf("Db name can't be empty\n")
+		log.Panicln(cmd.Flags().Lookup("db").Usage)
 	}
 
-	var brokerList []string
+	store, err := OpenStore(db)
+	if err != nil {
+		log.Printf("unable to open db: %s, exiting! %v\n", db, err)
+		log.Panicln(cmd.Flags().Lookup("db").Usage)
+	}
 
-	if *exhibitor {
+	// Kafka brokers & Kafka init
+
+	if exhibitor {
 		rb, err := KafkaSeedBrokers(os.Getenv("EXHIBITOR_URL"), "kafka")
 		if err != nil {
-			log.Panicf("unable to get Kafka Seed Brokers, exiting! %v\n", err)
+			log.Printf("unable to get Kafka Seed Brokers, exiting! %v\n", err)
+			log.Panicln(cmd.Flags().Lookup("exhibitor").Usage)
 		}
 		brokerList = rb
 	} else {
-		brokerList = strings.Split(*brokers, ",")
+		brokerList = strings.Split(kafkaBrokers, ",")
+		if len(brokerList) == 0 {
+			log.Printf("Broker list is empty or invalid format (%s)\n", kafkaBrokers)
+			log.Panicln(cmd.Flags().Lookup("kafka-brokers").Usage)
+		}
 	}
 
-	deliver, err := NewKafkaDeliver(store, "test", brokerList)
-	degradedMode := false
+	deliver, err = NewKafkaDeliver(store, DefaultClientName, brokerList)
+	degradedMode = false
+
 	if err != nil {
-		log.Errorf("unable to create KafkaDeliver: %v, runing in DEGRADED mode (saving events to BoldDB)\n", err)
-		degradedMode = true
+		if allowDegradedMode {
+			log.Errorf("unable to create KafkaDeliver: %v, running in DEGRADED mode (saving events to Bolt)\n", err)
+			degradedMode = true
+		} else {
+			log.Errorf("unable to create KafkaDeliver: %v. Degraded mode not allowed (see flags).\n", err)
+			os.Exit(2)
+		}
 	}
 
 	if !degradedMode {
 		deliver.Start()
 	}
-	StartEndpoint(*port, store)
+
+	StartEndpoint(port, store)
 
 	select {
 	case sig := <-exitChan:
 		log.Debugf("go=main at=received-signal signal=%s\n", sig)
+
 		err := store.Close()
+
 		if !degradedMode {
 			deliver.Stop()
 		}
@@ -87,6 +136,41 @@ func main() {
 			log.Debugf("go=main at=store-closed-cleanly \n")
 		}
 	}
+
+}
+
+func main() {
+
+	AppCmd := &cobra.Command{
+		Use:   AppName,
+		Short: AppName + " moves events from HTTP source to Kafka destination",
+		Long:  "Reliably move events from source to destination. Use Bolt as temporary local cache",
+		Run: func(cmd *cobra.Command, args []string) {
+			runApp(cmd, args)
+		},
+	}
+
+	var versionCmd = &cobra.Command{
+		Use:   "version",
+		Short: "Print the version number of " + AppName,
+		Long:  "All software has versions. This is " + AppName,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Printf("%s version: %s (%s)\n", AppName, AppVersion, AppDate)
+			os.Exit(0)
+		},
+	}
+
+	AppCmd.Flags().BoolVarP(&exhibitor, "exhibitor", "e", false, "use EXHIBITOR_URL from env to lookup seed brokers")
+	AppCmd.Flags().StringVarP(&kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
+	AppCmd.Flags().StringVarP(&db, "db", "", DefaultBoltName, "name of the boltdb database file")
+	AppCmd.Flags().StringVarP(&port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
+	AppCmd.Flags().BoolVarP(&debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
+	AppCmd.Flags().StringVarP(&logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
+	AppCmd.Flags().IntVarP(&cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
+	AppCmd.Flags().BoolVarP(&allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally wating for Kafka to appear")
+
+	AppCmd.AddCommand(versionCmd)
+	AppCmd.Execute()
 
 }
 
@@ -105,7 +189,7 @@ type Event struct {
 	Body    []byte
 }
 
-func MaxParallelism() int {
+func maxParallelism() int {
 	maxProcs := runtime.GOMAXPROCS(0)
 	numCPU := runtime.NumCPU()
 	if maxProcs < numCPU {

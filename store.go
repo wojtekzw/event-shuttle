@@ -33,6 +33,7 @@ type Store struct {
 	stopClean        chan bool
 	stopReport       chan bool
 	stopSync         chan bool
+	stopReconnect    chan bool
 	shutdown         chan bool
 }
 
@@ -145,7 +146,8 @@ func OpenStore(dbFile string) (*Store, error) {
 		stopClean:       make(chan bool, 1),
 		stopReport:      make(chan bool, 1),
 		stopSync:        make(chan bool, 1),
-		shutdown:        make(chan bool, 5),
+		stopReconnect:   make(chan bool, 1),
+		shutdown:        make(chan bool, 6),
 	}
 
 	go store.readEvents()
@@ -153,6 +155,7 @@ func OpenStore(dbFile string) (*Store, error) {
 	go store.storeEvents()
 	go store.report()
 	go store.syncStore()
+	go store.reconnectDelivery()
 
 	store.readTrigger <- true
 	log.Debugf("go=open at=store-created")
@@ -167,6 +170,7 @@ func (s *Store) Close() error {
 	s.stopRead <- true
 	s.stopReport <- true
 	s.stopSync <- true
+	s.stopReconnect <- true
 	//drain events out so the readEvents goroutine can unblock and exit.
 	//discard event read from bolt but still not delivered to the outside system
 	//they will be sent on next application start- as thet are still sitting in bolt
@@ -178,6 +182,7 @@ func (s *Store) Close() error {
 	close(s.eventsIn)
 	close(s.eventsDelivered)
 	close(s.eventsFailed)
+	<-s.shutdown
 	<-s.shutdown
 	<-s.shutdown
 	<-s.shutdown
@@ -486,4 +491,31 @@ func (s *Store) incrementWrittenToStore() int64 {
 func (s *Store) incrementReadFromStore() int64 {
 	s.readFromStore++
 	return s.readFromStore
+}
+
+// FIXME - try to reconnect ONLY if started in DEGRADED mode
+// Does nothing ig Kafka gone away during operation
+func (s *Store) reconnectDelivery() {
+	var err error
+
+	for {
+		select {
+		case <-s.stopReconnect:
+			s.shutdown <- true
+			return
+		case _, ok := <-time.After(10 * time.Second):
+
+			if ok && degradedMode {
+
+				deliver, err = NewKafkaDeliver(store, DefaultClientName, brokerList)
+				if err == nil {
+					deliver.Start()
+					degradedMode = false
+				}
+
+			}
+
+		}
+	}
+
 }
