@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
@@ -127,7 +128,7 @@ func OpenStore(dbFile string) (*Store, error) {
 	}
 
 	if writePointer > readPointer {
-		log.Errorf("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", writePointer, readPointer, writePointer-readPointer)
+		log.Infof("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", writePointer, readPointer, writePointer-readPointer)
 	}
 
 	log.Infof("go=open at=read-pointers read=%d write=%d\n", readPointer, writePointer)
@@ -247,6 +248,14 @@ func (s *Store) readEvents() {
 					log.Errorf("go=read at=read-error error=%s", err)
 				}
 			}
+			// In case of Kafka death and birth again there was no way to read data stored in Bolt until next request was sent from outside
+		case _, ok := <-time.After(10 * time.Second):
+
+			if ok {
+				if s.getWritePointer() > s.getReadPointer() {
+					s.triggerRead()
+				}
+			}
 		}
 
 	}
@@ -353,6 +362,13 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 				log.Errorf("go=read at=decode-fail error=%s\n", err)
 				return err
 			}
+
+			// TEST BEGIN
+			seqStr := strconv.FormatInt(seq, 10)
+			eventAppend := append(event.Body, []byte("--"+seqStr)...)
+			event.Body = eventAppend
+			//TEST END
+
 			eventOut = &EventOut{sequence: seq, event: event}
 			return nil
 		}
@@ -494,7 +510,7 @@ func (s *Store) incrementReadFromStore() int64 {
 }
 
 // FIXME - try to reconnect ONLY if started in DEGRADED mode
-// Does nothing ig Kafka gone away during operation
+// Does nothing if Kafka goes away during operation
 func (s *Store) reconnectDelivery() {
 	var err error
 

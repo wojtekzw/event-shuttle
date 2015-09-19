@@ -144,7 +144,7 @@ func main() {
 	AppCmd := &cobra.Command{
 		Use:   AppName,
 		Short: AppName + " moves events from HTTP source to Kafka destination",
-		Long:  "Reliably move events from source to destination. Use Bolt as temporary local cache",
+		Long:  "Reliably move events from source to destination. Use Bolt as a temporary local cache",
 		Run: func(cmd *cobra.Command, args []string) {
 			runApp(cmd, args)
 		},

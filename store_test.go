@@ -14,7 +14,7 @@ import (
 )
 
 func init() {
-	initLog(log.DebugLevel)
+	initLog(log.ErrorLevel)
 }
 
 func TestSerialize(t *testing.T) {

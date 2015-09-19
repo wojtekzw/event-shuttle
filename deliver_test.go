@@ -15,11 +15,11 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-const localKafka = "localhost:9092"
+const localKafka = DefaultKafkaBrokers
 
 func init() {
--       initLog(log.DebugLevel)
--}
+	initLog(log.ErrorLevel)
+}
 
 func kafkaIsUp() bool {
 	conn, err := net.Dial("tcp", localKafka)
