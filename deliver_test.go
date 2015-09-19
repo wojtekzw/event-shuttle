@@ -38,7 +38,7 @@ func TestKafkaConfig(t *testing.T) {
 		assert.Nil(t, err, fmt.Sprintf("%v+", err))
 		for i := 0; i < 10000; i++ {
 			// err = d.producer.SendMessage("test", nil, sarama.StringEncoder("hello world"))
-			msg := &sarama.ProducerMessage{Topic: "test", Value: sarama.StringEncoder("hellow world")}
+			msg := &sarama.ProducerMessage{Topic: "test", Value: sarama.StringEncoder("hello world")}
 			partition, offset, err := d.producer.SendMessage(msg)
 			assert.Nil(t, err, fmt.Sprintf("Partition:%d, Offset:%d, Error:%v+", partition, offset, err))
 		}
@@ -61,5 +61,21 @@ func TestNewKafkaDeliver(t *testing.T) {
 		time.Sleep(time.Second * 5)
 		d.Stop()
 		d.Store().Close()
+	}
+}
+
+func BenchmarkKafkaProduceAndSend(b *testing.B) {
+	if kafkaIsUp() {
+		d, err := NewKafkaDeliver(nil, "testClientId", []string{localKafka})
+		assert.Nil(b, err, fmt.Sprintf("%v+", err))
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			msg := &sarama.ProducerMessage{Topic: "test", Value: sarama.StringEncoder("hello BenchmarkKafkaProduceAndSend")}
+			partition, offset, err := d.producer.SendMessage(msg)
+			if err != nil {
+				assert.Nil(b, err, fmt.Sprintf("Partition:%d, Offset:%d, Error:%v+", partition, offset, err))
+			}
+		}
+		b.StartTimer()
 	}
 }

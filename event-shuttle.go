@@ -167,7 +167,7 @@ func main() {
 	AppCmd.Flags().BoolVarP(&debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
 	AppCmd.Flags().StringVarP(&logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
 	AppCmd.Flags().IntVarP(&cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
-	AppCmd.Flags().BoolVarP(&allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally wating for Kafka to appear")
+	AppCmd.Flags().BoolVarP(&allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear")
 
 	AppCmd.AddCommand(versionCmd)
 	AppCmd.Execute()
