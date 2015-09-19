@@ -31,7 +31,6 @@ const (
 )
 
 var (
-	exhibitor         bool
 	kafkaBrokers      string
 	db                string
 	port              string
@@ -87,19 +86,10 @@ func runApp(cmd *cobra.Command, args []string) {
 
 	// Kafka brokers & Kafka init
 
-	if exhibitor {
-		rb, err := KafkaSeedBrokers(os.Getenv("EXHIBITOR_URL"), "kafka")
-		if err != nil {
-			log.Printf("unable to get Kafka Seed Brokers, exiting! %v\n", err)
-			log.Panicln(cmd.Flags().Lookup("exhibitor").Usage)
-		}
-		brokerList = rb
-	} else {
-		brokerList = strings.Split(kafkaBrokers, ",")
-		if len(brokerList) == 0 {
-			log.Printf("Broker list is empty or invalid format (%s)\n", kafkaBrokers)
-			log.Panicln(cmd.Flags().Lookup("kafka-brokers").Usage)
-		}
+	brokerList = strings.Split(kafkaBrokers, ",")
+	if len(brokerList) == 0 {
+		log.Printf("Broker list is empty or invalid format (%s)\n", kafkaBrokers)
+		log.Panicln(cmd.Flags().Lookup("kafka-brokers").Usage)
 	}
 
 	deliver, err = NewKafkaDeliver(store, DefaultClientName, brokerList)
@@ -160,7 +150,6 @@ func main() {
 		},
 	}
 
-	AppCmd.Flags().BoolVarP(&exhibitor, "exhibitor", "e", false, "use EXHIBITOR_URL from env to lookup seed brokers")
 	AppCmd.Flags().StringVarP(&kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
 	AppCmd.Flags().StringVarP(&db, "db", "", DefaultBoltName, "name of the boltdb database file")
 	AppCmd.Flags().StringVarP(&port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
