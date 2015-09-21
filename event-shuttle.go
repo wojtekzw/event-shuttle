@@ -130,8 +130,8 @@ func (a *appRuntime) runApp(cmd *cobra.Command, args []string) {
 
 	a.store, err = OpenStore(a.db)
 	if err != nil {
-		log.Printf("unable to open db: %s, exiting! %v\n", a.db, err)
-		log.Panicln(cmd.Flags().Lookup("db").Usage)
+		log.Errorf("unable to open db: %s, exiting! %v\n", a.db, err)
+		os.Exit(2)
 	}
 
 	// Kafka brokers & Kafka init
@@ -146,7 +146,7 @@ func (a *appRuntime) runApp(cmd *cobra.Command, args []string) {
 
 		} else {
 			log.Errorf("unable to create KafkaDeliver: %v. Degraded mode not allowed (see flags).\n", err)
-			os.Exit(2)
+			os.Exit(3)
 		}
 	}
 
@@ -158,15 +158,15 @@ func (a *appRuntime) runApp(cmd *cobra.Command, args []string) {
 
 	StartEndpoint(a.port, a.store)
 
+	// wait for end signal
 	select {
 
 	case sig := <-a.exitChan:
-
+		log.Debugf("Got signal %v. Exiting...", sig)
 		// Signal reconnectDeliver to stop itself
 		a.stopReconnect <- true
 		// wait for response
 		<-a.shutdownReconnect
-		log.Debugf("go=main at=received-signal signal=%s\n", sig)
 
 		err := a.store.Close()
 
@@ -174,31 +174,25 @@ func (a *appRuntime) runApp(cmd *cobra.Command, args []string) {
 			a.deliver.Stop()
 		}
 		if err != nil {
-			log.Fatalf("go=main at=store-close-error error=%s\n", err)
-		} else {
-			log.Debugf("go=main at=store-closed-cleanly \n")
+			log.Errorf("go=main at=store-close-error error=%s\n", err)
+			os.Exit(1)
 		}
 	}
 
 }
 
-// FIXME - try to reconnect ONLY if started in DEGRADED mode
+// reconnectDelivery - try to reconnect ONLY if started in DEGRADED mode
 // Does nothing if Kafka goes away during operation
-// TODO - Uses channel stopReconnect which is in delivery and should be in App !!!!!!!!
 func (a *appRuntime) reconnectDelivery() {
 	var err error
 
 	for {
 		select {
 		case <-a.stopReconnect:
-			log.Debugf("go=main at=reconnect-pre-shutdown \n")
 			a.shutdownReconnect <- true
-			log.Debugf("go=main at=reconnect-shutdown \n")
 			return
 		case _, ok := <-time.After(10 * time.Second):
-			log.Debugf("go=main at=reconnect-time-10s \n")
 			if ok && a.degradedMode {
-
 				a.deliver, err = NewKafkaDeliver(a.store, DefaultClientName, a.kafkaBrokerList)
 				if err == nil {
 					a.deliver.Start()

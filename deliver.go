@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+
 	"github.com/Shopify/sarama"
 
 	log "github.com/Sirupsen/logrus"
@@ -23,7 +25,6 @@ type KafkaDeliver struct {
 
 // NewKafkaDeliver creates connection to Kafka
 func NewKafkaDeliver(store *Store, clientID string, brokerList []string) (*KafkaDeliver, error) {
-	log.Debugf("go=kafka at=new-kafka-deliver\n")
 
 	config := sarama.NewConfig()
 
@@ -34,19 +35,18 @@ func NewKafkaDeliver(store *Store, clientID string, brokerList []string) (*Kafka
 	if err != nil {
 		return nil, err
 	}
-	log.Debugf("go=kafka at=created-client\n")
 
 	producer, err := sarama.NewSyncProducerFromClient(client)
 	if err != nil {
 		return nil, err
 	}
-	log.Debugf("go=kafka at=created-producer\n")
 
 	defer func() {
 		if err != nil {
 			log.Errorf("go=kafka at=defer-close-producer after error %v\n", err)
 			if err := producer.Close(); err != nil {
-				log.Fatalf("go=kafka at=producer-close fatal error %v\n", err)
+				log.Errorf("go=kafka at=producer-close fatal error %v\n", err)
+				os.Exit(4)
 			}
 		}
 	}()

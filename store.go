@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/gob"
 	"math"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -76,7 +77,6 @@ func (s *Store) syncStore() {
 	for {
 		select {
 		case <-s.stopSync:
-			log.Debugf("go=sync at=shtudown-sync\n")
 			s.shutdown <- true
 			return
 		case _, ok := <-time.After(10 * time.Second):
@@ -84,9 +84,6 @@ func (s *Store) syncStore() {
 				err := s.syncDB()
 				if err != nil {
 					log.Errorf("go=sync at=sync-interval db sync error=%v ", err)
-				} else {
-					log.Debugf("go=sync at=sync-interval db sync OK\n")
-
 				}
 
 			}
@@ -98,7 +95,7 @@ func (s *Store) syncStore() {
 // OpenStore opens BoildDB database creating database and bucket if not exists
 // sets writePointer and readPointer from Bolt - to enable sending out events that still sit in database
 func OpenStore(dbFile string) (*Store, error) {
-	log.Debugf("go=open at=open-db\n")
+
 	db, err := bolt.Open(dbFile, 0600, &bolt.Options{Timeout: 1 * time.Second})
 
 	if err != nil {
@@ -118,7 +115,7 @@ func OpenStore(dbFile string) (*Store, error) {
 		log.Errorf("go=open at=error-creating-bucket error=%s\n", err)
 		return nil, err
 	}
-
+	// Register event type to be encoded and decoded
 	gob.Register(Event{})
 
 	// lastWritePointer - the last sequence number of event stored in BoldDB -  we should write to BoldDB with NEXT number
@@ -133,24 +130,25 @@ func OpenStore(dbFile string) (*Store, error) {
 	// increment writePointer to point to new value
 	// Fatal error if wrtePointe is MaxInit64 or < 0
 	if lastWritePointer == math.MaxInt64 {
-		log.Fatalf("go=open error Max number of lastWritePointer: %d", lastWritePointer)
+		log.Errorf("go=open error Max number of lastWritePointer: %d", lastWritePointer)
+		os.Exit(4)
 	}
 
 	if lastWritePointer < 0 {
-		log.Fatalf("go=open error invalid value of lastWritePointer: %d", lastWritePointer)
+		log.Errorf("go=open error invalid value of lastWritePointer: %d", lastWritePointer)
+		os.Exit(4)
 	}
 
 	writePointer := lastWritePointer + 1
 
 	if writePointer < readPointer {
-		log.Fatalf("go=open error lastWritePointer:%d < readPointer:%d", writePointer, readPointer)
+		log.Errorf("go=open error lastWritePointer:%d < readPointer:%d", writePointer, readPointer)
+		os.Exit(4)
 	}
 
-	if writePointer > readPointer {
-		log.Infof("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", writePointer, readPointer, writePointer-readPointer)
-	}
-
-	log.Infof("go=open at=read-pointers read=%d write=%d\n", readPointer, writePointer)
+	// if writePointer > readPointer {
+	// 	log.Infof("go=open error recovery: lastWritePointer:%d < readPointer:%d, delta:%d - will send to Kafka now", writePointer, readPointer, writePointer-readPointer)
+	// }
 
 	store := &Store{
 		db:              db,
@@ -177,7 +175,6 @@ func OpenStore(dbFile string) (*Store, error) {
 	go store.syncStore()
 
 	store.readTrigger <- true
-	log.Debugf("go=open at=store-created")
 	return store, nil
 }
 
@@ -201,17 +198,11 @@ func (s *Store) Close() error {
 	close(s.eventsIn)
 	close(s.eventsDelivered)
 	close(s.eventsFailed)
-	log.Debugf("go=store at=store-close-1")
 	<-s.shutdown
-	log.Debugf("go=store at=store-close-2")
 	<-s.shutdown
-	log.Debugf("go=store at=store-close-3")
 	<-s.shutdown
-	log.Debugf("go=store at=store-close-4")
 	<-s.shutdown
-	log.Debugf("go=store at=store-close-5")
 	<-s.shutdown
-	log.Debugf("go=store at=store-close-FINISHED")
 
 	return s.db.Close()
 }
@@ -233,7 +224,6 @@ func (s *Store) storeEvents() {
 				e.saved <- err == nil
 			}
 		case <-s.stopStore:
-			log.Debugf("go=store at=shtudown-store\n")
 			s.shutdown <- true
 			return
 		}
@@ -242,7 +232,7 @@ func (s *Store) storeEvents() {
 
 }
 
-// readEvents runs in a goroutine and reads events from boltdb and sends them on s.eventsOut
+// readEvents runs in a goroutine and reads events from Bolt and sends them on s.eventsOut
 // it also sends event to itself via s.readTrigger to trigger new read attemps. This mechanism
 // keeps it in busy loop until there are no events in boltdb
 // It waits for signal on s.stopRead channel to stop itself
@@ -250,7 +240,6 @@ func (s *Store) readEvents() {
 	for {
 		select {
 		case <-s.stopRead:
-			log.Debugf("go=read at=shutdown-read\n")
 			close(s.eventsOut)
 			s.shutdown <- true
 			return
@@ -273,7 +262,7 @@ func (s *Store) readEvents() {
 				}
 			}
 			// In case of Kafka death and birth again there was no way to read data stored in Bolt until next request was sent from outside
-		case _, ok := <-time.After(10 * time.Second):
+		case _, ok := <-time.After(5 * time.Second):
 
 			if ok {
 				if s.getWritePointer() > s.getReadPointer() {
@@ -294,14 +283,13 @@ func (s *Store) cleanEvents() {
 	for {
 		select {
 		case <-s.stopClean:
-			log.Debugf("go=clean at=shutdown-clean\n")
 			s.shutdown <- true
 			return
 		case delivered, ok := <-s.eventsDelivered:
 			if ok {
-				if delivered%1000 == 0 {
-					log.Infof("go=clean at=delete sequence=%d", delivered)
-				}
+				// FIXME - DELETE if delivered%1000 == 0 {
+				// 	log.Infof("go=clean at=delete sequence=%d", delivered)
+				// }
 				s.deleteEvent(delivered)
 			}
 		case failed, ok := <-s.eventsFailed:
@@ -322,19 +310,18 @@ func (s *Store) report() {
 	for {
 		select {
 		case <-s.stopReport:
-			log.Debugf("go=report at=shutdown-report\n")
-			read := s.getReadPointer()
-			write := s.getWritePointer()
-			log.Infof("go=report at=shutdown-report read=%d write=%d delta=%d", read, write, write-read)
-			log.Infof("go=report at=shutdown-report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
+			// read := s.getReadPointer()
+			// write := s.getWritePointer()
+			// log.Infof("go=report at=shutdown-report read=%d write=%d delta=%d", read, write, write-read)
 			s.shutdown <- true
+			// log.Infof("go=report at=shutdown-report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
 			return
 		case _, ok := <-time.After(10 * time.Second):
 
 			if ok {
-				read := s.getReadPointer()
-				write := s.getWritePointer()
-				log.Infof("go=report at=report read=%d write=%d delta=%d", read, write, write-read)
+				// read := s.getReadPointer()
+				// write := s.getWritePointer()
+				// log.Infof("go=report at=report read=%d write=%d delta=%d", read, write, write-read)
 				log.Infof("go=report at=report readFromStore=%d writtenToStore=%d delta=%d", s.readFromStore, s.writtenToStore, s.writtenToStore-s.readFromStore)
 
 			}
@@ -344,7 +331,7 @@ func (s *Store) report() {
 
 }
 
-// writeEvent - store one event in boltdb
+// writeEvent - store one event in Bolt
 func (s *Store) writeEvent(seq int64, e *EventIn) error {
 	err := s.db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(defaultEventBucket)
@@ -359,9 +346,10 @@ func (s *Store) writeEvent(seq int64, e *EventIn) error {
 			return err
 		}
 		_ = s.incrementWrittenToStore()
-		if seq%1000 == 0 {
-			log.Infof("go=store at=wrote sequence=%d", seq)
-		}
+
+		// if seq%1000 == 0 {
+		// 	log.Infof("go=store at=wrote sequence=%d", seq)
+		// }
 		return nil
 
 	})
@@ -380,20 +368,22 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 		}
 
 		_ = s.incrementReadFromStore()
-		if seq%1000 == 0 {
-			log.Infof("go=read at=read sequence=%d", seq)
-		}
+
+		// if seq%1000 == 0 {
+		// 	log.Infof("go=read at=read sequence=%d", seq)
+		// }
+
 		event, err := decodeEvent(eventBytes)
 		if err != nil {
 			log.Errorf("go=read at=decode-fail error=%s\n", err)
 			return err
 		}
 
-		// TEST BEGIN
+		// FIXME - TEST BEGIN
 		seqStr := strconv.FormatInt(seq, 10)
 		eventAppend := append(event.Body, []byte("--"+seqStr)...)
 		event.Body = eventAppend
-		//TEST END
+		//FIXME TEST END
 
 		eventOut = &EventOut{sequence: seq, event: event}
 		return nil
@@ -451,7 +441,8 @@ func (s *Store) incrementWritePointer() {
 	defer s.writePointerLock.Unlock()
 
 	if s.writePointer == math.MaxInt64 {
-		log.Fatalf("go=incrementWritePointer Max number (MaxIni64): %d", s.writePointer)
+		log.Errorf("go=incrementWritePointer Max number (MaxIni64): %d", s.writePointer)
+		os.Exit(4)
 	}
 
 	s.writePointer++
