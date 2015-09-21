@@ -156,7 +156,7 @@ func (a *appRuntime) runApp(cmd *cobra.Command, args []string) {
 		a.deliver.Start()
 	}
 
-	startEndpoint(a.port, a.store)
+	StartEndpoint(a.port, a.store)
 
 	select {
 
@@ -272,10 +272,6 @@ func maxParallelism() int {
 func initLog(logLevel log.Level) {
 	// Log as JSON instead of the default ASCII formatter.
 	// log.SetFormatter(&log.JSONFormatter{})
-
-	// Use the Airbrake hook to report errors that have Error severity or above to
-	// an exception tracker. You can create custom hooks, see the Hooks section.
-	// log.AddHook(airbrake.NewHook("https://example.com", "xyz", "development"))
 
 	// Output to stderr instead of stdout, could also be a file.
 	log.SetOutput(os.Stderr)

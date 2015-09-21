@@ -14,12 +14,14 @@ import (
 	"github.com/bmizerany/pat"
 )
 
-type httpEndpoint struct {
+// HTTPEndpoint -  struct with methods to start HTTP server
+type HTTPEndpoint struct {
 	store *Store
 }
 
-func startEndpoint(port string, store *Store) *httpEndpoint {
-	endpoint := httpEndpoint{store: store}
+// StartEndpoint - starts HTTP server on localhost
+func StartEndpoint(port string, store *Store) *HTTPEndpoint {
+	endpoint := HTTPEndpoint{store: store}
 	mux := pat.New()
 	// mux := bone.New()
 	mux.Post(fmt.Sprintf("/:topic"), http.HandlerFunc(endpoint.postEvent))
@@ -27,7 +29,7 @@ func startEndpoint(port string, store *Store) *httpEndpoint {
 	return &endpoint
 }
 
-func (e *httpEndpoint) postEvent(w http.ResponseWriter, req *http.Request) {
+func (e *HTTPEndpoint) postEvent(w http.ResponseWriter, req *http.Request) {
 	channel := req.URL.Query().Get(":topic")
 	if channel == "" {
 		w.WriteHeader(400)
@@ -60,7 +62,7 @@ func (e *httpEndpoint) postEvent(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-func (e *httpEndpoint) sendEvent(event *EventIn) {
+func (e *HTTPEndpoint) sendEvent(event *EventIn) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Errorln("at=recover-send-event-panic")
@@ -73,7 +75,7 @@ func (e *httpEndpoint) sendEvent(event *EventIn) {
 	e.send(event)
 }
 
-func (e *httpEndpoint) send(event *EventIn) {
+func (e *HTTPEndpoint) send(event *EventIn) {
 	e.store.eventsInChannel() <- event
 }
 

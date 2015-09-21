@@ -17,7 +17,7 @@ var (
 )
 
 func init() {
-	endpoint := httpEndpoint{}
+	endpoint := HTTPEndpoint{}
 	mux := pat.New()
 	mux.Post(fmt.Sprintf("/:topic"), http.HandlerFunc(endpoint.postEvent))
 
