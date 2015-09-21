@@ -6,17 +6,12 @@ import (
 	log "github.com/Sirupsen/logrus"
 )
 
-var maxDeliverGoroutines int = 8
+const maxDeliverGoroutines = 8
 
-type Deliver interface {
-	Store() *Store
-	Start() error
-	Stop() error
-}
-
+// KafkaDeliver is main type for Kafka delivery with Bolt databse
 type KafkaDeliver struct {
 	store             *Store
-	clientId          string
+	clientID          string
 	brokerList        []string
 	config            *sarama.Config
 	client            sarama.Client
@@ -26,12 +21,13 @@ type KafkaDeliver struct {
 	shutdown          chan bool
 }
 
-func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*KafkaDeliver, error) {
+// NewKafkaDeliver creates connection to Kafka
+func NewKafkaDeliver(store *Store, clientID string, brokerList []string) (*KafkaDeliver, error) {
 	log.Debugf("go=kafka at=new-kafka-deliver\n")
 
 	config := sarama.NewConfig()
 
-	config.ClientID = clientId
+	config.ClientID = clientID
 	config.Producer.RequiredAcks = sarama.WaitForAll
 
 	client, err := sarama.NewClient(brokerList, config)
@@ -56,7 +52,7 @@ func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*Kafka
 	}()
 
 	return &KafkaDeliver{
-		clientId:          clientId,
+		clientID:          clientID,
 		brokerList:        brokerList,
 		store:             store,
 		producer:          producer,
@@ -69,9 +65,9 @@ func NewKafkaDeliver(store *Store, clientId string, brokerList []string) (*Kafka
 
 }
 
-func (k *KafkaDeliver) Store() *Store {
-	return k.store
-}
+// func (k *KafkaDeliver) Store() *Store {
+// 	return k.store
+// }
 
 func (k *KafkaDeliver) Start() error {
 	for i := 0; i < k.deliverGoroutines; i++ {

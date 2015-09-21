@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -18,7 +19,7 @@ import (
 
 const (
 	AppName    = "event-shuttle"
-	AppVersion = "0.1"
+	AppVersion = "0.2"
 	AppDate    = "2015-09-17"
 
 	DefaultKafkaBrokers      = "192.168.99.100:9092"
@@ -30,95 +31,146 @@ const (
 	DefaultAllowDegradedMode = false
 )
 
-var (
-	kafkaBrokers      string
+type AppConfig struct {
+	kafkaBrokers    string
+	kafkaBrokerList []string
+
 	db                string
 	port              string
 	debug             bool
 	logLevel          string
+	initLogLevel      log.Level
 	cpu               int
 	allowDegradedMode bool
+}
 
-	degradedMode bool
-	deliver      *KafkaDeliver
-	store        *Store
-	brokerList   []string
-)
+type AppRuntime struct {
+	AppConfig
+	degradedMode      bool
+	exitChan          chan os.Signal
+	stopReconnect     chan bool
+	shutdownReconnect chan bool
+	deliver           *KafkaDeliver
+	store             *Store
+}
 
-func runApp(cmd *cobra.Command, args []string) {
+func (a *AppConfig) validateConfig(cmd *cobra.Command) error {
+	var err error
 
 	// check logLevel values and set initLogLevel
-	initLogLevel, err := log.ParseLevel(logLevel)
+	a.initLogLevel, err = log.ParseLevel(a.logLevel)
 	if err != nil {
-		fmt.Printf("Wrong loglevel value %s\n", logLevel)
-		fmt.Println(cmd.Flags().Lookup("allow-degraded-mode").Usage)
-		os.Exit(1)
+		err = fmt.Errorf("Invalid log level: \"%s\"\n%s", a.logLevel, cmd.Flags().Lookup("log-level").Usage)
+		return err
 	}
-	initLog(initLogLevel)
+
+	// check db name
+	if a.db == "" {
+		err = fmt.Errorf("Db name can't be empty\n%s", cmd.Flags().Lookup("db").Usage)
+		return err
+	}
+
+	// Kafka brokers
+	a.kafkaBrokerList = strings.Split(a.kafkaBrokers, ",")
+	if len(a.kafkaBrokerList) == 0 {
+		err = fmt.Errorf("Broker list is empty or invalid format (%s)\n%s", a.kafkaBrokers, cmd.Flags().Lookup("kafka-brokers").Usage)
+		return err
+	}
+
+	return nil
+}
+
+func (a *AppRuntime) initApp() error {
+	a.stopReconnect = make(chan bool)
+	a.shutdownReconnect = make(chan bool)
+	return nil
+}
+
+func (a *AppRuntime) endApp() error {
+	return nil
+}
+
+func (a *AppRuntime) debugApp() error {
 
 	//  check debug
-	if debug {
+	if a.debug {
 		go func() {
 			http.ListenAndServe("localhost:6060", nil)
 		}()
-		initLogLevel = log.DebugLevel
+		a.initLogLevel = log.DebugLevel
 	}
 
-	//  make signal channels for gracefull termination
-	exitChan := make(chan os.Signal)
+	return nil
+}
 
-	signal.Notify(exitChan, syscall.SIGHUP,
+func (a *AppRuntime) catchOSSignals() {
+	//  make signal channel for gracefull termination
+	a.exitChan = make(chan os.Signal)
+
+	signal.Notify(a.exitChan, syscall.SIGHUP,
 		syscall.SIGINT,
 		syscall.SIGTERM,
 		syscall.SIGQUIT)
 
-	// check db name & store init
-	if db == "" {
-		log.Printf("Db name can't be empty\n")
-		log.Panicln(cmd.Flags().Lookup("db").Usage)
-	}
+}
 
-	store, err := OpenStore(db)
+func (a *AppRuntime) setLogLevel() {
+	initLog(a.initLogLevel)
+
+}
+
+func (a *AppRuntime) runApp(cmd *cobra.Command, args []string) {
+
+	var err error
+
+	a.catchOSSignals()
+
+	a.setLogLevel()
+
+	a.store, err = OpenStore(a.db)
 	if err != nil {
-		log.Printf("unable to open db: %s, exiting! %v\n", db, err)
+		log.Printf("unable to open db: %s, exiting! %v\n", a.db, err)
 		log.Panicln(cmd.Flags().Lookup("db").Usage)
 	}
 
 	// Kafka brokers & Kafka init
 
-	brokerList = strings.Split(kafkaBrokers, ",")
-	if len(brokerList) == 0 {
-		log.Printf("Broker list is empty or invalid format (%s)\n", kafkaBrokers)
-		log.Panicln(cmd.Flags().Lookup("kafka-brokers").Usage)
-	}
-
-	deliver, err = NewKafkaDeliver(store, DefaultClientName, brokerList)
-	degradedMode = false
+	a.deliver, err = NewKafkaDeliver(a.store, DefaultClientName, a.kafkaBrokerList)
+	a.degradedMode = false
 
 	if err != nil {
-		if allowDegradedMode {
+		if a.allowDegradedMode {
 			log.Errorf("unable to create KafkaDeliver: %v, running in DEGRADED mode (saving events to Bolt)\n", err)
-			degradedMode = true
+			a.degradedMode = true
+
 		} else {
 			log.Errorf("unable to create KafkaDeliver: %v. Degraded mode not allowed (see flags).\n", err)
 			os.Exit(2)
 		}
 	}
 
-	if !degradedMode {
-		deliver.Start()
+	go a.reconnectDelivery()
+
+	if !a.degradedMode {
+		a.deliver.Start()
 	}
 
-	StartEndpoint(port, store)
+	StartEndpoint(a.port, a.store)
 
 	select {
-	case sig := <-exitChan:
+
+	case sig := <-a.exitChan:
+
+		// Signal reconnectDeliver to stop itself
+		a.stopReconnect <- true
+		// wait for response
+		<-a.shutdownReconnect
 		log.Debugf("go=main at=received-signal signal=%s\n", sig)
 
-		err := store.Close()
+		err := a.store.Close()
 
-		if !degradedMode {
-			deliver.Stop()
+		if !a.degradedMode {
+			a.deliver.Stop()
 		}
 		if err != nil {
 			log.Fatalf("go=main at=store-close-error error=%s\n", err)
@@ -129,14 +181,57 @@ func runApp(cmd *cobra.Command, args []string) {
 
 }
 
+// FIXME - try to reconnect ONLY if started in DEGRADED mode
+// Does nothing if Kafka goes away during operation
+// TODO - Uses channel stopReconnect which is in delivery and should be in App !!!!!!!!
+func (a *AppRuntime) reconnectDelivery() {
+	var err error
+
+	for {
+		select {
+		case <-a.stopReconnect:
+			log.Debugf("go=main at=reconnect-pre-shutdown \n")
+			a.shutdownReconnect <- true
+			log.Debugf("go=main at=reconnect-shutdown \n")
+			return
+		case _, ok := <-time.After(10 * time.Second):
+			log.Debugf("go=main at=reconnect-time-10s \n")
+			if ok && a.degradedMode {
+
+				a.deliver, err = NewKafkaDeliver(a.store, DefaultClientName, a.kafkaBrokerList)
+				if err == nil {
+					a.deliver.Start()
+					a.degradedMode = false
+				}
+
+			}
+		}
+	}
+
+}
+
 func main() {
+
+	var (
+		err        error
+		appRuntime AppRuntime
+	)
+
+	appRuntime = AppRuntime{}
 
 	AppCmd := &cobra.Command{
 		Use:   AppName,
 		Short: AppName + " moves events from HTTP source to Kafka destination",
 		Long:  "Reliably move events from source to destination. Use Bolt as a temporary local cache",
 		Run: func(cmd *cobra.Command, args []string) {
-			runApp(cmd, args)
+			appRuntime.initApp()
+			err = appRuntime.validateConfig(cmd)
+			if err != nil {
+				fmt.Printf("%s\n", err)
+				os.Exit(1)
+			}
+			appRuntime.debugApp()
+			appRuntime.runApp(cmd, args)
 		},
 	}
 
@@ -150,15 +245,16 @@ func main() {
 		},
 	}
 
-	AppCmd.Flags().StringVarP(&kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
-	AppCmd.Flags().StringVarP(&db, "db", "", DefaultBoltName, "name of the boltdb database file")
-	AppCmd.Flags().StringVarP(&port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
-	AppCmd.Flags().BoolVarP(&debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
-	AppCmd.Flags().StringVarP(&logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
-	AppCmd.Flags().IntVarP(&cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
-	AppCmd.Flags().BoolVarP(&allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear")
+	AppCmd.Flags().StringVarP(&appRuntime.kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
+	AppCmd.Flags().StringVarP(&appRuntime.db, "db", "", DefaultBoltName, "name of the boltdb database file")
+	AppCmd.Flags().StringVarP(&appRuntime.port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
+	AppCmd.Flags().BoolVarP(&appRuntime.debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
+	AppCmd.Flags().StringVarP(&appRuntime.logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
+	AppCmd.Flags().IntVarP(&appRuntime.cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
+	AppCmd.Flags().BoolVarP(&appRuntime.allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear")
 
 	AppCmd.AddCommand(versionCmd)
+
 	AppCmd.Execute()
 
 }

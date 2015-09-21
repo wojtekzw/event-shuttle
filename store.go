@@ -81,14 +81,14 @@ func (s *Store) syncStore() {
 func OpenStore(dbFile string) (*Store, error) {
 	log.Debugf("go=open at=open-db\n")
 	db, err := bolt.Open(dbFile, 0600, &bolt.Options{Timeout: 1 * time.Second})
+
+	if err != nil {
+		log.Errorf("go=open at=error-opening-db (%s) error=%s\n", dbFile, err)
+		return nil, err
+	}
 	// Do not sync every insert
 	// Do sync every 10 seconds
 	db.NoSync = true
-
-	if err != nil {
-		log.Errorf("go=open at=error-opening-db error=%s\n", err)
-		return nil, err
-	}
 
 	err = db.Update(func(tx *bolt.Tx) error {
 		_, berr := tx.CreateBucketIfNotExists(EVENTS_BUCKET)
@@ -156,7 +156,6 @@ func OpenStore(dbFile string) (*Store, error) {
 	go store.storeEvents()
 	go store.report()
 	go store.syncStore()
-	go store.reconnectDelivery()
 
 	store.readTrigger <- true
 	log.Debugf("go=open at=store-created")
@@ -171,7 +170,7 @@ func (s *Store) Close() error {
 	s.stopRead <- true
 	s.stopReport <- true
 	s.stopSync <- true
-	s.stopReconnect <- true
+
 	//drain events out so the readEvents goroutine can unblock and exit.
 	//discard event read from bolt but still not delivered to the outside system
 	//they will be sent on next application start- as thet are still sitting in bolt
@@ -183,12 +182,18 @@ func (s *Store) Close() error {
 	close(s.eventsIn)
 	close(s.eventsDelivered)
 	close(s.eventsFailed)
+	log.Debugf("go=store at=store-close-1")
 	<-s.shutdown
+	log.Debugf("go=store at=store-close-2")
 	<-s.shutdown
+	log.Debugf("go=store at=store-close-3")
 	<-s.shutdown
+	log.Debugf("go=store at=store-close-4")
 	<-s.shutdown
+	log.Debugf("go=store at=store-close-5")
 	<-s.shutdown
-	<-s.shutdown
+	log.Debugf("go=store at=store-close-FINISHED")
+
 	return s.db.Close()
 }
 
@@ -507,31 +512,4 @@ func (s *Store) incrementWrittenToStore() int64 {
 func (s *Store) incrementReadFromStore() int64 {
 	s.readFromStore++
 	return s.readFromStore
-}
-
-// FIXME - try to reconnect ONLY if started in DEGRADED mode
-// Does nothing if Kafka goes away during operation
-func (s *Store) reconnectDelivery() {
-	var err error
-
-	for {
-		select {
-		case <-s.stopReconnect:
-			s.shutdown <- true
-			return
-		case _, ok := <-time.After(10 * time.Second):
-
-			if ok && degradedMode {
-
-				deliver, err = NewKafkaDeliver(store, DefaultClientName, brokerList)
-				if err == nil {
-					deliver.Start()
-					degradedMode = false
-				}
-
-			}
-
-		}
-	}
-
 }
