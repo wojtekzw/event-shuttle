@@ -46,7 +46,7 @@ func TestOpenCloseStore(t *testing.T) {
 		init := store.getWritePointer()
 		acks := make(chan bool)
 		for i := 0; i < 100; i++ {
-			store.EventsInChannel() <- &EventIn{event: &Event{Channel: "test", Body: []byte("BODY-TestOpenCloseStore")}, saved: acks}
+			store.eventsInChannel() <- &EventIn{event: &Event{Channel: "test", Body: []byte("BODY-TestOpenCloseStore")}, saved: acks}
 			<-acks
 		}
 		curr := store.getWritePointer()
@@ -66,7 +66,7 @@ func BenchmarkStoreEventsInBolt(b *testing.B) {
 	acks := make(chan bool)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		store.EventsInChannel() <- &EventIn{event: &Event{Channel: "test", Body: []byte("BODY-BenchmarkStoreEventsInBolt")}, saved: acks}
+		store.eventsInChannel() <- &EventIn{event: &Event{Channel: "test", Body: []byte("BODY-BenchmarkStoreEventsInBolt")}, saved: acks}
 		<-acks
 	}
 	b.StopTimer()

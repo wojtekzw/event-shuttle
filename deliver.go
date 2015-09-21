@@ -65,13 +65,27 @@ func NewKafkaDeliver(store *Store, clientID string, brokerList []string) (*Kafka
 
 }
 
-// func (k *KafkaDeliver) Store() *Store {
-// 	return k.store
-// }
+// Store is used only in tests
+func (k *KafkaDeliver) Store() *Store {
+	return k.store
+}
 
+// Start N deliverEvents goroutines responsible for delivering
+// events from Bolt to Kafka
 func (k *KafkaDeliver) Start() error {
 	for i := 0; i < k.deliverGoroutines; i++ {
 		go k.deliverEvents(i)
+	}
+	return nil
+}
+
+// Stop deliveryEvents goroutines by sending signals to shutdownDeliver channel
+func (k *KafkaDeliver) Stop() error {
+	for i := 0; i < k.deliverGoroutines; i++ {
+		k.shutdownDeliver <- true
+	}
+	for i := 0; i < k.deliverGoroutines; i++ {
+		<-k.shutdown
 	}
 	return nil
 }
@@ -126,14 +140,4 @@ func ack(store *Store, seq int64) {
 
 func noAck(store *Store, seq int64) {
 	store.eventsFailed <- seq
-}
-
-func (k *KafkaDeliver) Stop() error {
-	for i := 0; i < k.deliverGoroutines; i++ {
-		k.shutdownDeliver <- true
-	}
-	for i := 0; i < k.deliverGoroutines; i++ {
-		<-k.shutdown
-	}
-	return nil
 }

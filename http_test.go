@@ -17,9 +17,9 @@ var (
 )
 
 func init() {
-	endpoint := Endpoint{}
+	endpoint := httpEndpoint{}
 	mux := pat.New()
-	mux.Post(fmt.Sprintf("/:topic"), http.HandlerFunc(endpoint.PostEvent))
+	mux.Post(fmt.Sprintf("/:topic"), http.HandlerFunc(endpoint.postEvent))
 
 	server = httptest.NewServer(mux) //Creating new server with the user handlers
 

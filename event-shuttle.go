@@ -17,6 +17,7 @@ import (
 	"net/http"
 )
 
+// Main defaults for application
 const (
 	AppName    = "event-shuttle"
 	AppVersion = "0.2"
@@ -31,7 +32,7 @@ const (
 	DefaultAllowDegradedMode = false
 )
 
-type AppConfig struct {
+type appConfig struct {
 	kafkaBrokers    string
 	kafkaBrokerList []string
 
@@ -44,8 +45,8 @@ type AppConfig struct {
 	allowDegradedMode bool
 }
 
-type AppRuntime struct {
-	AppConfig
+type appRuntime struct {
+	appConfig
 	degradedMode      bool
 	exitChan          chan os.Signal
 	stopReconnect     chan bool
@@ -54,7 +55,7 @@ type AppRuntime struct {
 	store             *Store
 }
 
-func (a *AppConfig) validateConfig(cmd *cobra.Command) error {
+func (a *appConfig) validateConfig(cmd *cobra.Command) error {
 	var err error
 
 	// check logLevel values and set initLogLevel
@@ -80,17 +81,17 @@ func (a *AppConfig) validateConfig(cmd *cobra.Command) error {
 	return nil
 }
 
-func (a *AppRuntime) initApp() error {
+func (a *appRuntime) initApp() error {
 	a.stopReconnect = make(chan bool)
 	a.shutdownReconnect = make(chan bool)
 	return nil
 }
 
-func (a *AppRuntime) endApp() error {
+func (a *appRuntime) endApp() error {
 	return nil
 }
 
-func (a *AppRuntime) debugApp() error {
+func (a *appRuntime) debugApp() error {
 
 	//  check debug
 	if a.debug {
@@ -103,7 +104,7 @@ func (a *AppRuntime) debugApp() error {
 	return nil
 }
 
-func (a *AppRuntime) catchOSSignals() {
+func (a *appRuntime) catchOSSignals() {
 	//  make signal channel for gracefull termination
 	a.exitChan = make(chan os.Signal)
 
@@ -114,12 +115,12 @@ func (a *AppRuntime) catchOSSignals() {
 
 }
 
-func (a *AppRuntime) setLogLevel() {
+func (a *appRuntime) setLogLevel() {
 	initLog(a.initLogLevel)
 
 }
 
-func (a *AppRuntime) runApp(cmd *cobra.Command, args []string) {
+func (a *appRuntime) runApp(cmd *cobra.Command, args []string) {
 
 	var err error
 
@@ -155,7 +156,7 @@ func (a *AppRuntime) runApp(cmd *cobra.Command, args []string) {
 		a.deliver.Start()
 	}
 
-	StartEndpoint(a.port, a.store)
+	startEndpoint(a.port, a.store)
 
 	select {
 
@@ -184,7 +185,7 @@ func (a *AppRuntime) runApp(cmd *cobra.Command, args []string) {
 // FIXME - try to reconnect ONLY if started in DEGRADED mode
 // Does nothing if Kafka goes away during operation
 // TODO - Uses channel stopReconnect which is in delivery and should be in App !!!!!!!!
-func (a *AppRuntime) reconnectDelivery() {
+func (a *appRuntime) reconnectDelivery() {
 	var err error
 
 	for {
@@ -213,25 +214,25 @@ func (a *AppRuntime) reconnectDelivery() {
 func main() {
 
 	var (
-		err        error
-		appRuntime AppRuntime
+		err    error
+		appRun appRuntime
 	)
 
-	appRuntime = AppRuntime{}
+	appRun = appRuntime{}
 
 	AppCmd := &cobra.Command{
 		Use:   AppName,
 		Short: AppName + " moves events from HTTP source to Kafka destination",
 		Long:  "Reliably move events from source to destination. Use Bolt as a temporary local cache",
 		Run: func(cmd *cobra.Command, args []string) {
-			appRuntime.initApp()
-			err = appRuntime.validateConfig(cmd)
+			appRun.initApp()
+			err = appRun.validateConfig(cmd)
 			if err != nil {
 				fmt.Printf("%s\n", err)
 				os.Exit(1)
 			}
-			appRuntime.debugApp()
-			appRuntime.runApp(cmd, args)
+			appRun.debugApp()
+			appRun.runApp(cmd, args)
 		},
 	}
 
@@ -245,33 +246,18 @@ func main() {
 		},
 	}
 
-	AppCmd.Flags().StringVarP(&appRuntime.kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
-	AppCmd.Flags().StringVarP(&appRuntime.db, "db", "", DefaultBoltName, "name of the boltdb database file")
-	AppCmd.Flags().StringVarP(&appRuntime.port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
-	AppCmd.Flags().BoolVarP(&appRuntime.debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
-	AppCmd.Flags().StringVarP(&appRuntime.logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
-	AppCmd.Flags().IntVarP(&appRuntime.cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
-	AppCmd.Flags().BoolVarP(&appRuntime.allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear")
+	AppCmd.Flags().StringVarP(&appRun.kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
+	AppCmd.Flags().StringVarP(&appRun.db, "db", "", DefaultBoltName, "name of the boltdb database file")
+	AppCmd.Flags().StringVarP(&appRun.port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
+	AppCmd.Flags().BoolVarP(&appRun.debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
+	AppCmd.Flags().StringVarP(&appRun.logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
+	AppCmd.Flags().IntVarP(&appRun.cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
+	AppCmd.Flags().BoolVarP(&appRun.allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear")
 
 	AppCmd.AddCommand(versionCmd)
 
 	AppCmd.Execute()
 
-}
-
-type EventIn struct {
-	event *Event
-	saved chan bool
-}
-
-type EventOut struct {
-	event    *Event
-	sequence int64
-}
-
-type Event struct {
-	Channel string
-	Body    []byte
 }
 
 func maxParallelism() int {

@@ -14,8 +14,27 @@ import (
 	"github.com/boltdb/bolt"
 )
 
-var EVENTS_BUCKET = []byte("events")
+// Event - main event type
+type Event struct {
+	Channel string
+	Body    []byte
+}
 
+// EventIn - struct for channel
+type EventIn struct {
+	event *Event
+	saved chan bool
+}
+
+// EventOut - struct for channel
+type EventOut struct {
+	event    *Event
+	sequence int64
+}
+
+var defaultEventBucket = []byte("events")
+
+// Store is main tyoe for storing events via channels
 type Store struct {
 	db               *bolt.DB
 	eventsIn         chan *EventIn  // full event to store in BoltDB goes into this channel
@@ -38,11 +57,11 @@ type Store struct {
 	shutdown         chan bool
 }
 
-func (s *Store) EventsInChannel() chan<- *EventIn {
+func (s *Store) eventsInChannel() chan<- *EventIn {
 	return s.eventsIn
 }
 
-func (s *Store) EventsOutChannel() <-chan *EventOut {
+func (s *Store) eventsOutChannel() <-chan *EventOut {
 	return s.eventsOut
 }
 
@@ -91,7 +110,7 @@ func OpenStore(dbFile string) (*Store, error) {
 	db.NoSync = true
 
 	err = db.Update(func(tx *bolt.Tx) error {
-		_, berr := tx.CreateBucketIfNotExists(EVENTS_BUCKET)
+		_, berr := tx.CreateBucketIfNotExists(defaultEventBucket)
 		return berr
 	})
 
@@ -328,7 +347,7 @@ func (s *Store) report() {
 // writeEvent - store one event in boltdb
 func (s *Store) writeEvent(seq int64, e *EventIn) error {
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		bucket := tx.Bucket(EVENTS_BUCKET)
+		bucket := tx.Bucket(defaultEventBucket)
 		encoded, err := encodeEvent(e.event)
 		if err != nil {
 			log.Errorf("go=store at=encode-fail error=%s\n", err)
@@ -353,30 +372,32 @@ func (s *Store) writeEvent(seq int64, e *EventIn) error {
 func (s *Store) readEvent(seq int64) (*EventOut, error) {
 	var eventOut *EventOut
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		events := tx.Bucket(EVENTS_BUCKET)
+		events := tx.Bucket(defaultEventBucket)
 		eventBytes := events.Get(writeSequence(seq))
+
 		if eventBytes == nil || len(eventBytes) == 0 {
 			return nil
-		} else {
-			_ = s.incrementReadFromStore()
-			if seq%1000 == 0 {
-				log.Infof("go=read at=read sequence=%d", seq)
-			}
-			event, err := decodeEvent(eventBytes)
-			if err != nil {
-				log.Errorf("go=read at=decode-fail error=%s\n", err)
-				return err
-			}
-
-			// TEST BEGIN
-			seqStr := strconv.FormatInt(seq, 10)
-			eventAppend := append(event.Body, []byte("--"+seqStr)...)
-			event.Body = eventAppend
-			//TEST END
-
-			eventOut = &EventOut{sequence: seq, event: event}
-			return nil
 		}
+
+		_ = s.incrementReadFromStore()
+		if seq%1000 == 0 {
+			log.Infof("go=read at=read sequence=%d", seq)
+		}
+		event, err := decodeEvent(eventBytes)
+		if err != nil {
+			log.Errorf("go=read at=decode-fail error=%s\n", err)
+			return err
+		}
+
+		// TEST BEGIN
+		seqStr := strconv.FormatInt(seq, 10)
+		eventAppend := append(event.Body, []byte("--"+seqStr)...)
+		event.Body = eventAppend
+		//TEST END
+
+		eventOut = &EventOut{sequence: seq, event: event}
+		return nil
+
 	})
 	return eventOut, err
 }
@@ -384,7 +405,7 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 // deleteEvent - delete one event from bolt
 func (s *Store) deleteEvent(seq int64) error {
 	err := s.db.Update(func(tx *bolt.Tx) error {
-		events := tx.Bucket(EVENTS_BUCKET)
+		events := tx.Bucket(defaultEventBucket)
 		err := events.Delete(writeSequence(seq))
 		return err
 
@@ -415,7 +436,7 @@ func (s *Store) incrementReadPointer(read int64) {
 	s.readPointerLock.Lock()
 	defer s.readPointerLock.Unlock()
 	if s.readPointer == read {
-		s.readPointer += 1
+		s.readPointer++
 	}
 }
 
@@ -433,7 +454,7 @@ func (s *Store) incrementWritePointer() {
 		log.Fatalf("go=incrementWritePointer Max number (MaxIni64): %d", s.writePointer)
 	}
 
-	s.writePointer += 1
+	s.writePointer++
 
 }
 
@@ -456,7 +477,7 @@ func findReadAndWritePointers(db *bolt.DB) (int64, int64, error) {
 	lastWritePointer := int64(0)
 	currentReadPointer := int64(math.MaxInt64)
 	err := db.View(func(tx *bolt.Tx) error {
-		events := tx.Bucket(EVENTS_BUCKET)
+		events := tx.Bucket(defaultEventBucket)
 		err := events.ForEach(func(k, v []byte) error {
 			seq, _ := readSequence(k)
 			if seq > lastWritePointer {

@@ -14,29 +14,29 @@ import (
 	"github.com/bmizerany/pat"
 )
 
-type Endpoint struct {
+type httpEndpoint struct {
 	store *Store
 }
 
-func StartEndpoint(port string, store *Store) *Endpoint {
-	endpoint := Endpoint{store: store}
+func startEndpoint(port string, store *Store) *httpEndpoint {
+	endpoint := httpEndpoint{store: store}
 	mux := pat.New()
 	// mux := bone.New()
-	mux.Post(fmt.Sprintf("/:topic"), http.HandlerFunc(endpoint.PostEvent))
+	mux.Post(fmt.Sprintf("/:topic"), http.HandlerFunc(endpoint.postEvent))
 	go http.ListenAndServe("127.0.0.1:"+port, mux)
 	return &endpoint
 }
 
-func (e *Endpoint) PostEvent(w http.ResponseWriter, req *http.Request) {
+func (e *httpEndpoint) postEvent(w http.ResponseWriter, req *http.Request) {
 	channel := req.URL.Query().Get(":topic")
 	if channel == "" {
 		w.WriteHeader(400)
-		w.Write(NoChannel)
+		w.Write(noChannel)
 	} else {
 		body, err := ioutil.ReadAll(req.Body)
 		if err != nil {
 			w.WriteHeader(500)
-			w.Write(BodyErr)
+			w.Write(bodyErr)
 		} else {
 			saved := make(chan bool)
 			event := EventIn{event: &Event{Channel: channel, Body: body}, saved: saved}
@@ -48,19 +48,19 @@ func (e *Endpoint) PostEvent(w http.ResponseWriter, req *http.Request) {
 					w.WriteHeader(200)
 				} else {
 					w.WriteHeader(500)
-					w.Write(SaveErr)
+					w.Write(saveErr)
 				}
 			case <-timeout:
 				log.Infoln("at=post-event-timeout")
 				w.WriteHeader(500)
-				w.Write(SaveTimeout)
+				w.Write(saveTimeout)
 			}
 
 		}
 	}
 }
 
-func (e *Endpoint) sendEvent(event *EventIn) {
+func (e *httpEndpoint) sendEvent(event *EventIn) {
 	defer func() {
 		if r := recover(); r != nil {
 			log.Errorln("at=recover-send-event-panic")
@@ -73,21 +73,21 @@ func (e *Endpoint) sendEvent(event *EventIn) {
 	e.send(event)
 }
 
-func (e *Endpoint) send(event *EventIn) {
-	e.store.EventsInChannel() <- event
+func (e *httpEndpoint) send(event *EventIn) {
+	e.store.eventsInChannel() <- event
 }
 
-var NoChannel = Json(ErrJson{id: "no-channel", message: "no event channel specified"})
-var BodyErr = Json(ErrJson{id: "read-error", message: "error while reading body"})
-var SaveErr = Json(ErrJson{id: "save-error", message: "save event returned false"})
-var SaveTimeout = Json(ErrJson{id: "save-timeout", message: "save timed out"})
+type errJSON struct {
+	id      string
+	message string
+}
 
-func Json(err ErrJson) []byte {
+func convertToJSON(err errJSON) []byte {
 	j, _ := json.Marshal(err)
 	return j
 }
 
-type ErrJson struct {
-	id      string
-	message string
-}
+var noChannel = convertToJSON(errJSON{id: "no-channel", message: "no event channel specified"})
+var bodyErr = convertToJSON(errJSON{id: "read-error", message: "error while reading body"})
+var saveErr = convertToJSON(errJSON{id: "save-error", message: "save event returned false"})
+var saveTimeout = convertToJSON(errJSON{id: "save-timeout", message: "save timed out"})
