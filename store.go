@@ -6,7 +6,6 @@ import (
 	"encoding/gob"
 	"math"
 	"os"
-	"strconv"
 	"sync"
 	"time"
 
@@ -104,7 +103,7 @@ func OpenStore(dbFile string) (*Store, error) {
 	}
 	// Do not sync every insert
 	// Do sync every 10 seconds
-	db.NoSync = true
+	// db.NoSync = true
 
 	err = db.Update(func(tx *bolt.Tx) error {
 		_, berr := tx.CreateBucketIfNotExists(defaultEventBucket)
@@ -380,9 +379,9 @@ func (s *Store) readEvent(seq int64) (*EventOut, error) {
 		}
 
 		// FIXME - TEST BEGIN
-		seqStr := strconv.FormatInt(seq, 10)
-		eventAppend := append(event.Body, []byte("--"+seqStr)...)
-		event.Body = eventAppend
+		//		seqStr := strconv.FormatInt(seq, 10)
+		//		eventAppend := append(event.Body, []byte("--"+seqStr)...)
+		//		event.Body = eventAppend
 		//FIXME TEST END
 
 		eventOut = &EventOut{sequence: seq, event: event}

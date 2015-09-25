@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	log "github.com/Sirupsen/logrus"
 
@@ -20,10 +21,11 @@ import (
 // Main defaults for application
 const (
 	AppName    = "event-shuttle"
-	AppVersion = "0.2"
+	AppNameEnv = "SHUTTLE"
+	AppVersion = "0.3"
 	AppDate    = "2015-09-17"
 
-	DefaultKafkaBrokers      = "192.168.99.100:9092"
+	DefaultKafkaBrokers      = "localhost:9092"
 	DefaultBoltName          = "events.db"
 	DefaultListeningHTTPPort = "3887"
 	DefaultDebugMode         = false
@@ -55,10 +57,20 @@ type appRuntime struct {
 	store             *Store
 }
 
-func (a *appConfig) validateConfig(cmd *cobra.Command) error {
+func (a *appConfig) getConfigStr() string {
+	return fmt.Sprintf("%#v", a)
+}
+
+func (a *appConfig) getAndValidateConfig(cmd *cobra.Command) error {
 	var err error
 
+	a.port = viper.GetString("port")
+	a.debug = viper.GetBool("debug")
+	a.cpu = viper.GetInt("cpu")
+	a.allowDegradedMode = viper.GetBool("allow-degraded-mode")
+
 	// check logLevel values and set initLogLevel
+	a.logLevel = viper.GetString("log-level")
 	a.initLogLevel, err = log.ParseLevel(a.logLevel)
 	if err != nil {
 		err = fmt.Errorf("Invalid log level: \"%s\"\n%s", a.logLevel, cmd.Flags().Lookup("log-level").Usage)
@@ -66,13 +78,14 @@ func (a *appConfig) validateConfig(cmd *cobra.Command) error {
 	}
 
 	// check db name
+	a.db = viper.GetString("db")
 	if a.db == "" {
 		err = fmt.Errorf("Db name can't be empty\n%s", cmd.Flags().Lookup("db").Usage)
 		return err
 	}
 
 	// Kafka brokers
-	a.kafkaBrokerList = strings.Split(a.kafkaBrokers, ",")
+	a.kafkaBrokerList = strings.Split(viper.GetString("kafka-brokers"), ",")
 	if len(a.kafkaBrokerList) == 0 {
 		err = fmt.Errorf("Broker list is empty or invalid format (%s)\n%s", a.kafkaBrokers, cmd.Flags().Lookup("kafka-brokers").Usage)
 		return err
@@ -212,6 +225,11 @@ func main() {
 		appRun appRuntime
 	)
 
+	viper.SetEnvPrefix(AppNameEnv)
+	viper.AutomaticEnv()
+	replacer := strings.NewReplacer("-", "_")
+	viper.SetEnvKeyReplacer(replacer)
+
 	appRun = appRuntime{}
 
 	AppCmd := &cobra.Command{
@@ -220,7 +238,9 @@ func main() {
 		Long:  "Reliably move events from source to destination. Use Bolt as a temporary local cache",
 		Run: func(cmd *cobra.Command, args []string) {
 			appRun.initApp()
-			err = appRun.validateConfig(cmd)
+			err = appRun.getAndValidateConfig(cmd)
+			fmt.Println(appRun.getConfigStr())
+			// os.Exit(1)
 			if err != nil {
 				fmt.Printf("%s\n", err)
 				os.Exit(1)
@@ -240,16 +260,23 @@ func main() {
 		},
 	}
 
-	AppCmd.Flags().StringVarP(&appRun.kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers")
-	AppCmd.Flags().StringVarP(&appRun.db, "db", "", DefaultBoltName, "name of the boltdb database file")
-	AppCmd.Flags().StringVarP(&appRun.port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events")
-	AppCmd.Flags().BoolVarP(&appRun.debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug")
-	AppCmd.Flags().StringVarP(&appRun.logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug")
-	AppCmd.Flags().IntVarP(&appRun.cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use")
-	AppCmd.Flags().BoolVarP(&appRun.allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear")
+	AppCmd.Flags().StringVarP(&appRun.kafkaBrokers, "kafka-brokers", "k", DefaultKafkaBrokers, "comma seperated list of ip:port to use as seed Kafka brokers"+" (env: "+AppNameEnv+"_KAFKA_BROKERS"+")")
+	AppCmd.Flags().StringVarP(&appRun.db, "db", "", DefaultBoltName, "name of the boltdb database file"+" (env: "+AppNameEnv+"_DB"+")")
+	AppCmd.Flags().StringVarP(&appRun.port, "port", "p", DefaultListeningHTTPPort, "HTTP port on which to listen for events"+" (env: "+AppNameEnv+"_PORT"+")")
+	AppCmd.Flags().BoolVarP(&appRun.debug, "debug", "d", DefaultDebugMode, "start a pprof http server on 6060 and set loglevel=debug"+" (env: "+AppNameEnv+"_DEBUG"+")")
+	AppCmd.Flags().StringVarP(&appRun.logLevel, "log-level", "l", DefaultLogLevel, "Log level - choose one of panic,fatal,error,warn|warning,info,debug"+" (env: "+AppNameEnv+"_LOG_LEVEL"+")")
+	AppCmd.Flags().IntVarP(&appRun.cpu, "cpu", "c", maxParallelism(), "Number of CPU's to use"+" (env: "+AppNameEnv+"_CPU"+")")
+	AppCmd.Flags().BoolVarP(&appRun.allowDegradedMode, "allow-degraded-mode", "", DefaultAllowDegradedMode, "allow to start without connection to Kafka - buffer everything locally waiting for Kafka to appear"+" (env: "+AppNameEnv+"_ALLOW_DEGRADED_MODE"+")")
+
+	viper.BindPFlag("kafka-brokers", AppCmd.Flags().Lookup("kafka-brokers"))
+	viper.BindPFlag("db", AppCmd.Flags().Lookup("db"))
+	viper.BindPFlag("port", AppCmd.Flags().Lookup("port"))
+	viper.BindPFlag("debug", AppCmd.Flags().Lookup("debug"))
+	viper.BindPFlag("log-level", AppCmd.Flags().Lookup("log-level"))
+	viper.BindPFlag("cpu", AppCmd.Flags().Lookup("cpu"))
+	viper.BindPFlag("allow-degraded-mode", AppCmd.Flags().Lookup("allow-degraded-mode"))
 
 	AppCmd.AddCommand(versionCmd)
-
 	AppCmd.Execute()
 
 }

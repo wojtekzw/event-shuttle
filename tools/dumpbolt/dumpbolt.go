@@ -9,6 +9,8 @@ import (
 	"time"
 
 	log "github.com/Sirupsen/logrus"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/boltdb/bolt"
 )
@@ -40,9 +42,7 @@ func encodeEvent(evt *Event) ([]byte, error) {
 	return eventBytes.Bytes(), err
 }
 
-func DumpStore() {
-
-	dbName := "events.db"
+func DumpStore(dbName string) {
 
 	db, err := bolt.Open(dbName, 0600, &bolt.Options{Timeout: 1 * time.Second})
 	if err != nil {
@@ -69,6 +69,37 @@ func DumpStore() {
 	})
 }
 
+const (
+	appName         = "dumpbolt"
+	appNameEnv      = "DUMPBOLT"
+	defaultBoltName = "events.db"
+)
+
+var (
+	dbName string
+)
+
 func main() {
-	DumpStore()
+
+	viper.SetEnvPrefix(appNameEnv)
+	viper.AutomaticEnv()
+	replacer := strings.NewReplacer("-", "_")
+	viper.SetEnvKeyReplacer(replacer)
+
+	appCmd := &cobra.Command{
+		Use:   appName,
+		Short: appName + " dumps content of Bolt file",
+		Long:  "Dump Bolt database - use to check content",
+		Run: func(cmd *cobra.Command, args []string) {
+			dbName = viper.GetString("db")
+			fmt.Printf("Database name: %s\n", dbName)
+			DumpStore(dbName)
+		},
+	}
+
+	appCmd.Flags().StringVarP(&dbName, "db", "", defaultBoltName, "name of the bolt database file"+" (env: "+appNameEnv+"_DB "+")")
+	viper.BindPFlag("db", appCmd.Flags().Lookup("db"))
+
+	appCmd.Execute()
+
 }

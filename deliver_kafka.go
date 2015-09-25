@@ -2,11 +2,14 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/Shopify/sarama"
 
 	log "github.com/Sirupsen/logrus"
 )
+
+
 
 const maxDeliverGoroutines = 8
 
@@ -30,14 +33,18 @@ func NewKafkaDeliver(store *Store, clientID string, brokerList []string) (*Kafka
 
 	config.ClientID = clientID
 	config.Producer.RequiredAcks = sarama.WaitForAll
+	config.Net.DialTimeout = 2 * time.Second // real connect time is about 4* DialTimeout (?)
 
 	client, err := sarama.NewClient(brokerList, config)
+
 	if err != nil {
 		return nil, err
 	}
 
 	producer, err := sarama.NewSyncProducerFromClient(client)
+
 	if err != nil {
+
 		return nil, err
 	}
 
