@@ -1,0 +1,10 @@
+{
+	"ArtifactsDest": "binary/",
+	"Tasks": [
+		"default"
+	],
+	"Arch": "amd64",
+	"Os": "linux,darwin",
+	"MainDirsExclude": "tools/",
+	"ConfigVersion": "0.9"
+}
